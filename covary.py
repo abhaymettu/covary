@@ -769,7 +769,7 @@ def render(D, cap=12, for_agent=False, detail=False):
 def main():
     p = argparse.ArgumentParser(description="Joint availability of variables on the same respondents.")
     p.add_argument("variables", nargs="*")
-    p.add_argument("--min", type=int, default=1,
+    p.add_argument("--min", type=int, default=1, metavar="N",
                    help="minimum usable joint n per stratum. 0 shows zero-overlap "
                         "strata, which still do not count as usable")
     p.add_argument("--min-year", type=int, default=0, metavar="N",
@@ -786,6 +786,10 @@ def main():
                         "automatically when nothing is usable")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     a = p.parse_args()
+    if a.min < 0:
+        p.error("--min cannot be negative; 0 shows zero-overlap strata")
+    if a.min_year is not None and a.min_year < 0:
+        p.error("--min-year cannot be negative")
     if not a.variables and not a.find:
         p.error("give at least one variable, or --find PATTERN")
     cap = None if a.all else 12
@@ -830,10 +834,13 @@ def main():
         # denominator and the absence rows reached the text without reaching the
         # payload. Assert rather than filter, so a new one fails loudly instead
         # of vanishing.
+        # AssertionError, not sys.exit(str). sys.exit with a string exits 1,
+        # which is a documented verdict about the world, and using it here would
+        # repeat the exact bypass that made a --dataset typo look like an answer.
         hidden = [k for k in D if k.startswith("_")]
-        if hidden:
-            sys.exit(f"internal: payload has private keys {hidden}, which would "
-                     "be hidden from --json. Make them public or drop them.")
+        assert not hidden, (
+            f"payload has private keys {hidden}, which --json would hide. "
+            "Make them public or drop them.")
         print(json.dumps(D, indent=2))
     else:
         cap = None if a.all else 12

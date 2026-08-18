@@ -197,6 +197,8 @@ g "not_found states the index bound"  "this index covers" HSSEX --dataset nhanes
 t 2 "a bad --dataset is unanswerable, not a verdict"  numgiven --dataset nope
 t 2 "an unknown name is unanswerable"                 numgivn --dataset gss
 
+t 2 "a negative threshold is rejected, not echoed"  PREGNANT PROSTATE --dataset brfss --min -1
+
 echo "payload, not prose"
 # Four review rounds found the same defect under four names: a fact in the text
 # and not in the structure. These assert the payload, because asserting the
