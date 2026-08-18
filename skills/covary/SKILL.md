@@ -44,7 +44,9 @@ Otherwise use the CLI, which needs no dependencies:
 ```bash
 python3 /path/to/covary/covary.py numgiven socfrend
 python3 /path/to/covary/covary.py RIAGENDR BMXBMI LBXGLU --dataset nhanes
-python3 /path/to/covary/covary.py FIREARM5 ACEDEPRS --dataset brfss --min 500
+python3 /path/to/covary/covary.py GUNLOAD ACEDEPRS --dataset brfss --min 500
+python3 /path/to/covary/covary.py --find gun --dataset brfss     # search names
+python3 /path/to/covary/covary.py DR1TKCAL BMXBMI --dataset nhanes --json
 ```
 
 Exit status is 1 when no stratum supports the whole set, so it gates a pipeline.
@@ -64,12 +66,21 @@ requested variable within one stratum. That is the real n the design has.
   indexed years (GSS 1972-2024, NHANES 1999-2023, BRFSS 2011-2023), or they may be
   separated by a skip pattern rather than by design. covary flags the last case when
   it can detect it.
+- **What an empty answer now comes with**, and it is usually the actionable part.
+  covary reports what dropping each single variable would buy ("without PROSTATE,
+  brfss 2018|NY n=6685"), which is the decision actually in front of you. It also
+  names which variable was absent in each stratum that dropped out, so "this module
+  never ran here" is distinguishable from "both ran and no respondent has both".
+  Report those to the user rather than only the verdict.
 - **The marginal n is much larger than the joint n**: normal and important. Base
   every power calculation and every reported n on the joint figure.
 
 For BRFSS, the answer is per `year|state`. "4 of 52 states" is not a footnote: a
 result resting on four self-selected states cannot support a national claim, and
-a state fixed effect has almost nothing to estimate from.
+a state fixed effect has almost nothing to estimate from. `--min` thresholds one
+state-year; if the plan is to pool states within a year, which is the usual plan,
+use `--min-year` instead, because a per-stratum threshold discards small states
+the analysis would have kept.
 
 ## Do not
 
