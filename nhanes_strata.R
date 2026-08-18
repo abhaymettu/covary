@@ -11,7 +11,7 @@
 # Filing a shared-SEQN respondent under the pooled label puts them in a stratum
 # nothing else can reach. Bit positions are assigned per stratum, so no AND can
 # cross that boundary, and a real design reads as dead. Measured: SSALB x RIAGENDR
-# reported a joint n of 539 against a true 21,837, exiting 0. That is a 40x
+# reported a joint n of 539 against a true 21,846, exiting 0. That is a 40x
 # understatement in the pessimistic direction, which is the direction this project
 # calls disqualifying.
 #

@@ -99,7 +99,7 @@ cases are distinct so a script can tell them apart:
 |---|---|
 | 0 | at least one stratum has every variable on the same respondents |
 | 1 | none does, at the `--min` you gave |
-| 2 | a variable name was not found, so nothing was tested |
+| 2 | the question cannot be answered as asked: a name was not found, or the set spans datasets so no stratum could hold all of it |
 
 As an MCP server, which is the interface that matters since agents walk into
 this failure constantly:

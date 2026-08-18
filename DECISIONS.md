@@ -193,7 +193,7 @@ year.
 ```
 index/        2.0GB parquet, one row per (respondent, variable). Reproducible
               from source, checked by audit.R, gitignored, deletable.
-covary_*.db   129MB, one bitmap per (stratum, variable). Derived from index/.
+covary_*.db   132MB, one bitmap per (stratum, variable). Derived from index/.
               This is the shipped artifact.
 ```
 
@@ -205,11 +205,11 @@ exists to remove, wearing a different hat.
 SQLite rather than a bespoke binary file, because a hand-rolled format is the
 easiest place to be silently wrong. `sqlite3` and `zlib` are standard library, so
 the query path installs nothing. One file per dataset because a single file was
-131MB, over GitHub's 100MB limit, and because someone who only wants GSS should
-take 7.7MB rather than 129MB.
+131MB at the time, over GitHub's 100MB limit, and because someone who only wants
+GSS takes 7.7MB rather than the whole 132MB.
 
 A joint n is `popcount(bitmap_a & bitmap_b)`. A three-variable BRFSS query across
-690 strata and 5.4M respondents answers in 0.036s.
+689 strata and 5.4M respondents answers in 0.036s.
 
 ## Auditing
 
@@ -225,7 +225,7 @@ to a builder.
 Sampling finds systematic breakage and misses local breakage. The first version
 of `pack.py --verify` sampled 40 variable pairs out of 6,918 GSS variables, which
 is 0.02% of them, and missed a single flipped bit. Two of its three checks are
-now exhaustive across all 229,240 bitmaps.
+now exhaustive across every bitmap.
 
 ## Bugs found by auditing, all silent
 

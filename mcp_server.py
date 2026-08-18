@@ -128,7 +128,7 @@ def run(variables, dataset=None, min_n=1):
     # overlap warning and the mode note were wired to the CLI only, so a model
     # reading this interface added two strata that describe the same people and
     # reported an inflated N. A caveat a caller can forget is not a caveat.
-    lines, ok = report(db, variables, dataset, min_n, min_year=None, for_agent=True)
+    lines, ok, _ = report(db, variables, dataset, min_n, min_year=None, for_agent=True)
     text = "\n".join(list(notes) + lines)
     text += ("\n\nPresence means non-missing on the actual variable, so a respondent "
              "who skipped a module or an exam is correctly absent. Read any warning "

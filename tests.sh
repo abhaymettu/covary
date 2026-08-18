@@ -33,7 +33,7 @@ t 0 "nhanes dietary is indexed"                    DR1TKCAL BMXBMI LBXGLU --data
 t 1 "nhanes disjoint cycles"                      SDJ1REPN ALQ121 --dataset nhanes
 t 0 "brfss state optional modules"                GUNLOAD ACEDEPRS --dataset brfss
 t 2 "unknown name is not a dead design"           nosuchvariable --dataset gss
-t 1 "cross-dataset set can never be joint"        numgiven BMXBMI
+t 2 "cross-dataset set is unanswerable, not dead"  numgiven BMXBMI
 
 echo "bugs that shipped once"
 t 0 "repeated name must not force a false NONE"   happy socfrend happy --dataset gss

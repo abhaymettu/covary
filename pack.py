@@ -21,10 +21,11 @@ from it and is checked against it by audit.R.
   .venv/bin/python pack.py            # all datasets
   .venv/bin/python pack.py gss        # one, for a quick test
 
-One file per dataset, covary_<dataset>.db. A single file would be 131MB, over
-GitHub's 100MB limit, but the split earns its keep anyway: someone who only wants
-GSS takes 10MB instead of 131MB, and a rebuilt dataset does not rewrite the
-others.
+One file per dataset, covary_<dataset>.db. A single file was over GitHub's 100MB
+limit, and the split earns its keep anyway: someone who only wants GSS takes a
+fraction of the whole, and rebuilding one dataset does not rewrite the others.
+Sizes are printed by this script and deliberately not written down here, because
+the ones that were drifted three ways within a day.
 
 Layout:
   bm(dataset, stratum, variable, pop, bits)   bits = zlib(little-endian bitmap)
@@ -113,7 +114,7 @@ def pack(only=None):
     for ds, db in dbs.items():
         db.commit()
         # Only an index on variable: every query filters by variable first, and a
-        # second index cost 10MB to serve no query.
+        # second index cost megabytes to serve no query.
         db.execute("create index bm_var on bm(variable)")
         db.execute("vacuum")
         db.close()

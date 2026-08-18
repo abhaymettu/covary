@@ -100,7 +100,9 @@ cat("\nnhanes respondent identity\n")
 nh <- idx |> filter(dataset == "nhanes") |> distinct(unit_id, stratum) |> collect()
 d <- sum(duplicated(nh$unit_id))
 if (d) fail(d, "nhanes unit_ids appear in more than one stratum") else
-  ok(format(nrow(nh), big.mark = ","), "nhanes respondents, each in exactly one stratum")
+  ok(format(nrow(nh), big.mark = ","),
+     "nhanes SEQNs, each in exactly one stratum (identifiers, not people:",
+     "PHYSICAL_OVERLAP records where one person holds two)")
 
 # ---- GSS against source, exact ---------------------------------------------
 cat("\ngss against gssr source, exact match\n")

@@ -437,7 +437,12 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
     handed a researcher an inflated N. A caveat that a caller can forget is not a
     caveat.
 
-    Returns (lines, ok). ok is False when no stratum is usable.
+    Returns (lines, ok, data). `data` is the same answer as a structure, so
+    --json is a rendering of this computation rather than a second one. It was a
+    second one, and it therefore carried the single caveat a reviewer had named
+    and silently dropped the two they had not: the mode note and the
+    cross-dataset verdict. Consolidating the text renderer closed half a class
+    and left the other half open.
     """
     L = []
     lim = cap if cap is not None else 10 ** 9   # --all passes None
@@ -448,6 +453,13 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
     marg = marginals(db, vars_, dataset)
     datasets = {r[1] for r in marg}
 
+    D = {"variables": list(vars_), "dataset": dataset, "min": min_n,
+         "min_year": min_year, "notes": [], "warnings": []}
+    datasets0 = {r[1] for r in marg}
+    if len(datasets0) > 1 and not dataset:
+        result_rows = []
+    else:
+        _r0, result_rows = usable_strata(db, vars_, dataset, min_n, min_year)
     L.append("per variable, ignoring co-administration:")
     for v, ds, n, lo, hi, ns in marg:
         # List the strata when they will fit. "1985 .. 2024, 4 strata" reads as
@@ -466,16 +478,30 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
             "select distinct stratum from bm where variable = ? and dataset = ?", (v, ds))}
         dbl = ""
         for (d2, st), others in PHYSICAL_OVERLAP.items():
-            if d2 == ds and st in vs and any(o in vs for o in others):
+            # only when the warning it points at will actually be printed, which
+            # depends on the RESULT strata, not on every stratum the variable has
+            if (d2 == ds and st in vs and any(o in vs for o in others)
+                    and any(r[0] == d2 and r[1] == st for r in result_rows)
+                    and any(r[0] == d2 and r[1] in others for r in result_rows)):
                 dbl = "  <- counts some people twice, see warning below"
                 break
         L.append(f"  {v:<12} {ds:<7} n={n:<8} {span}{dbl}")
+        D.setdefault("marginals", []).append(
+            {"variable": v, "dataset": ds, "n": n, "first": lo, "last": hi,
+             "strata": ns, "double_counts_people": bool(dbl)})
 
     if len(datasets) > 1 and not dataset:
         L.append("")
-        L.append(f"These variables span {', '.join(sorted(datasets))}. A stratum belongs to"
-                 " one dataset, so this set can never have a joint n. Name one dataset.")
-        return L, False          # that note IS the answer; do not bury it
+        msg = (f"These variables span {', '.join(sorted(datasets))}. A stratum belongs"
+               " to one dataset, so this set can never have a joint n. Name one dataset.")
+        L.append(msg)
+        # Not the same as a dead design, and --json used to report it as one:
+        # ok false, usable empty, exit 1, indistinguishable. That is the failure
+        # validate() exists to prevent, on a third interface.
+        D.update(cross_dataset=sorted(datasets), reason="cross_dataset",
+                 usable=[], ok=False)
+        D["notes"].append(msg)
+        return L, False, D
 
     rows, usable = usable_strata(db, vars_, dataset, min_n, min_year)
     why = absences(db, vars_, dataset, datasets)
@@ -541,9 +567,12 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
         # --why raises the cap on this section rather than gating it. The refactor
         # made absences unconditional, which quietly turned --why into a no-op
         # while --help still advertised it as opt-in.
-        L.extend(show_absences(why, cap if detail else min(3, lim)))
-        if not detail and (len(why[0]) > 3):
-            L.append(f"    ({len(why[0]) - 3} more; {hint('why', for_agent)})")
+        # --all expands this section too. It used to be capped at 3 unless --why,
+        # so --all printed a notice naming a flag that could not expand it.
+        n_show = lim if (detail or cap is None) else min(3, lim)
+        L.extend(show_absences(why, n_show))
+        if len(why[0]) > n_show:
+            L.append(f"    ({len(why[0]) - n_show} more; {hint('why', for_agent)})")
 
     # Caveats. Rendered here so neither interface can forget them.
     mn = mode_note(db, usable or rows)
@@ -551,18 +580,38 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
         L.append("")
         L.append(f"  note: gss records an interview `mode` variable in {', '.join(mn)}. A")
         L.append("  joint n does not tell you the mode was comparable across those years.")
+        D["notes"].append({"kind": "gss_mode", "strata": mn})
     for ds, st, clash in overlap_warning(usable or rows):
         L.append("")
         L.append(f"  warning: {ds} {st} and {', '.join(clash)} contain the same people")
         L.append("  under different respondent ids. Do not pool them or add their n together,")
         L.append("  and note the per-variable n above sums both. Pick one.")
+        D["warnings"].append({"kind": "same_people_different_ids",
+                              "dataset": ds, "stratum": st, "shares_with": clash})
 
     if for_agent:
         # show_joint and show_absences build their own truncation notice and have
         # no interface argument, so those two strings are still rewritten here.
         L = [l.replace("(CLI: --all)", f"({hint('all', True)})")
               .replace(", use --all", "") for l in L]
-    return L, bool(usable)
+    D.update(
+        usable=[{"dataset": ds, "stratum": st, "n": n} for ds, st, n, _ in usable],
+        zero=[{"dataset": ds, "stratum": st, "pair_with_no_overlap": bool(f)}
+              for ds, st, _, f in (rows if min_n == 0
+                                   else joint(db, vars_, dataset, 0)) if _ == 0],
+        dropped=as_dropped(why),
+        collected_but_no_overlap={
+            "strata": sum(1 for r in (rows if min_n == 0
+                                      else joint(db, vars_, dataset, 0)) if r[2] == 0),
+            "disjoint": sum(1 for r in (rows if min_n == 0
+                                        else joint(db, vars_, dataset, 0))
+                            if r[2] == 0 and r[3])},
+        leave_one_out=[{"drop": d, "dataset": ds2, "stratum": st, "n": n}
+                       for d, ds2, st, n in
+                       (leave_one_out(db, vars_, dataset, min_n, min_year)
+                        if not usable else [])],
+        ok=bool(usable), reason=D.get("reason", "ok" if usable else "not_usable"))
+    return L, bool(usable), D
 
 
 def main():
@@ -640,42 +689,18 @@ def main():
                 print(f"  no near match for {m!r}; try --find PATTERN", file=sys.stderr)
         return 2   # a bad name is not a dead design; keep the exit codes distinct
 
-    rows, usable = usable_strata(db, a.variables, a.dataset, a.min, a.min_year)
-    why = absences(db, a.variables, a.dataset,
-                   {r[1] for r in marginals(db, a.variables, a.dataset)})
-    zeros = [r for r in (rows if a.min == 0
-                         else joint(db, a.variables, a.dataset, 0)) if r[2] == 0]
-
+    lines, ok, data = report(db, a.variables, a.dataset, a.min, a.min_year, cap,
+                             detail=a.why)
     if a.json:
-        marg = marginals(db, a.variables, a.dataset)
-        loo = leave_one_out(db, a.variables, a.dataset, a.min, a.min_year)
-        print(json.dumps({
-            "variables": a.variables, "dataset": a.dataset,
-            "min": a.min, "min_year": a.min_year or None,
-            "notes": [n.strip() for n in notes],
-            "marginals": [{"variable": v, "dataset": d, "n": n, "first": lo,
-                           "last": hi, "strata": ns} for v, d, n, lo, hi, ns in marg],
-            "usable": [{"dataset": ds, "stratum": st, "n": n} for ds, st, n, _ in usable],
-            # zero strata belong in BOTH branches. They used to be built only when
-            # nothing was usable, so a pipeline reading --min 0 --json never saw
-            # GSS 2004, which is the case this whole tool opens with.
-            "zero": [{"dataset": ds, "stratum": st,
-                      "pair_with_no_overlap": bool(f)} for ds, st, _, f in zeros],
-            "collected_but_no_overlap": {"strata": len(zeros),
-                                         "disjoint": sum(1 for r in zeros if r[3])},
-            "dropped": as_dropped(why),
-            "leave_one_out": [{"drop": d, "dataset": ds, "stratum": st, "n": n}
-                              for d, ds, st, n in loo],
-            "overlapping_strata": [{"dataset": ds, "stratum": st, "shares_people_with": c}
-                                   for ds, st, c in overlap_warning(usable or rows)],
-            "ok": bool(usable),
-        }, indent=2))
-        return 0 if usable else 1
-
-    lines, ok = report(db, a.variables, a.dataset, a.min, a.min_year, cap,
-                       detail=a.why)
-    print("\n".join(lines))
-    return 0 if ok else 1
+        data["notes"] = [n.strip() if isinstance(n, str) else n
+                         for n in ([n.strip() for n in notes] + data["notes"])]
+        print(json.dumps(data, indent=2))
+    else:
+        print("\n".join(lines))
+    # cross_dataset is not a dead design; it exits 2 like a bad name, because the
+    # caller asked something that cannot have an answer rather than something
+    # whose answer is no.
+    return 0 if ok else (2 if data.get("reason") == "cross_dataset" else 1)
 
 
 if __name__ == "__main__":
