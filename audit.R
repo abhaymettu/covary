@@ -28,7 +28,11 @@ a <- commandArgs(trailingOnly = TRUE)
 FULL     <- length(a) && a[1] == "full"
 N_NHANES <- if (FULL) Inf else if (length(a) >= 1) as.integer(a[1]) else 6
 N_GSS    <- if (FULL) Inf else if (length(a) >= 2) as.integer(a[2]) else 40
-BRFSS_YRS <- if (FULL) 2011:2023 else if (length(a) >= 3) as.integer(a[3]) else integer(0)
+# "full" checks every BRFSS year; "full 2023" checks only that one, for when the
+# rest have already passed exhaustively and you are re-verifying a fix.
+BRFSS_YRS <- if (FULL && length(a) > 1) as.integer(a[-1]) else
+             if (FULL) 2011:2023 else
+             if (length(a) >= 3) as.integer(a[3]) else integer(0)
 
 fails <- 0
 fail <- function(...) { cat("  FAIL:", ..., "\n"); fails <<- fails + 1 }
@@ -100,7 +104,8 @@ if (fails == before) ok(length(gvars), "gss variables match source exactly")
 # dangerous direction and the one a silent reader bug produces.
 cat("\nnhanes against cdc source, index must not undercount\n")
 man <- read_parquet(".cache/nhanes_manifest.parquet")
-man <- man[!grepl("^(DR|DS)", man$Table), ]
+source("nhanes_scope.R")   # the same rule the build uses, not a lookalike
+man <- man[!nhanes_dietary(man), ]
 pick <- if (FULL) seq_len(nrow(man)) else sample(nrow(man), min(N_NHANES, nrow(man)))
 before <- fails
 
@@ -121,7 +126,11 @@ for (i in pick) {
   if (!"SEQN" %in% names(d)) next
 
   vars <- setdiff(names(d), "SEQN")
-  src <- vapply(vars, function(v) sum(!is.na(d[[v]])), integer(1))
+  # Distinct respondents, not rows. NHANES has tables with many rows per SEQN
+  # well beyond the dietary files: AUXAR (audiometry) runs ~12 rows per person,
+  # RXQANA ~1.04. The index counts a respondent once per variable, so comparing
+  # against a raw row count reports a phantom undercount on every such table.
+  src <- vapply(vars, function(v) length(unique(d$SEQN[!is.na(d[[v]])])), integer(1))
   src <- src[src > 0]
   got <- nh_key[paste(cyc, names(src))]
   short <- names(src)[is.na(got) | got < src]

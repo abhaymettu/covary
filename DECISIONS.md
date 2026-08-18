@@ -56,10 +56,15 @@ so the assumption breaks loudly if `gssr` ever changes.
 - **All continuous cycles**, 1999-2000 through 2021-2023. The question people
   bring is "which cycle can I use", so truncating to recent cycles removes the
   answer.
-- **Dietary excluded.** `DR*` and `DS*` files are day-level or supplement-level
-  with several rows per SEQN, so presence there would not mean what it means
-  everywhere else. CDC's dietary listing does not cover 2021-2023, so there is a
-  `^(DR|DS)` prefix backstop alongside it.
+- **Dietary excluded, and my original reason for it was wrong.** I excluded
+  `DR*` and `DS*` because they carry several rows per SEQN and I assumed presence
+  would not mean the same thing there. The exhaustive audit showed that reasoning
+  does not hold: NHANES has plenty of multi-row tables outside dietary, with
+  audiometry (`AUXAR_*`) at about 12 rows per respondent, and the index handles
+  them correctly because presence dedups by respondent. So dietary is a scope
+  limitation, not a principled exclusion, and it could be added with a rebuild.
+  CDC's dietary listing does not cover 2021-2023, so there is a `^(DR|DS)` prefix
+  backstop alongside the listing.
 - **Pooled files keep their own span.** `2017-2020` pre-pandemic and `1999-2004`
   are separate strata, not folded into a two-year cycle. They are a different
   respondent set, and folding them would overstate joint n.
@@ -156,11 +161,20 @@ Two things made it disqualifying rather than annoying:
 Fix: read the XPT raw with `haven::read_xpt`. Presence does not need labels, so
 it does not need translation.
 
-**The audit's own bug.** It compared one year of BRFSS source against thirteen
-years of index, having filtered by variable but never by year, so everything
-appearing in more than one year failed. Worth recording because it looked exactly
-like a data bug, and the instinct to trust the audit over the data would have
-been wrong.
+**The audit's own bugs, of which there were more than the index had.** Worth
+recording plainly, because both looked exactly like data bugs and the instinct to
+trust the audit over the data would have been wrong twice.
+
+1. It compared one year of BRFSS source against thirteen years of index, having
+   filtered by variable but never by year, so everything appearing in more than
+   one year failed.
+2. It compared raw row counts against the index's distinct-respondent counts, so
+   every NHANES table with repeated rows per SEQN reported a phantom undercount.
+   This one only surfaced in exhaustive mode; the sampled runs had never drawn
+   one of those tables.
+
+The second is the reason exhaustive mode exists. It also corrected a factual
+belief I had written down about the dietary files, above.
 
 ## Deliberately not doing
 

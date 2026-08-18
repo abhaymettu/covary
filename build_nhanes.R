@@ -46,12 +46,8 @@ if (file.exists(MAN)) {
 }
 cat("manifest:", nrow(man), "tables\n")
 
-# CDC's own dietary list, plus a DR/DS prefix backstop. The listing pages do not
-# cover every cycle (2021-2023 returns nothing), and every remaining DR/DS table
-# is a recall, a supplement file, or a food-code lookup with no SEQN at all.
-diet <- unique(unlist(lapply(c(seq(1999, 2017, by = 2), "P", 2021, 2023), function(y)
-  tryCatch(nhanesTables("DIET", y, namesonly = TRUE), error = function(e) character(0)))))
-drop <- man$Table %in% diet | grepl("^(DR|DS)", man$Table)
+source("nhanes_scope.R")   # one definition, shared with audit.R
+drop <- nhanes_dietary(man)
 man <- man[!drop, ]
 cat("tables:", nrow(man), "after dropping", sum(drop), "dietary\n")
 
