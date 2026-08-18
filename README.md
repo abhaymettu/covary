@@ -181,7 +181,7 @@ figures. Run the command yourself; the numbers should reproduce exactly.
 | | marginal n, all years | joint n | mechanism |
 |---|---|---|---|
 | GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004, 1,526 in 1985 | split ballot |
-| NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | 2,842 to 4,659 per cycle | fasting subsample |
+| NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | 2,842 to 4,659 per stratum | fasting subsample |
 | BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 in 2023, plus 920 in 1 of 54 in 2022 | state optional modules |
 
 A caution the tool cannot give you: `FIREARM5` is whether a firearm is kept in the
