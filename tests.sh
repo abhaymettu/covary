@@ -319,6 +319,25 @@ if [ -f labels.db ]; then
   t 0 "punctuation in a query is not a crash"  --search "cost of care - out of pocket??" --dataset gss
   g "json carries the label"  '"description"'  numgiven --dataset gss --json
 
+  # The two co-administration transcripts have been checked against real output
+  # since they first drifted. The search transcript was written by hand in the
+  # same edit that added this section and was wrong on the first try, so it gets
+  # the same guard rather than the same trust.
+  if $PY - <<'EOF'
+import subprocess, sys
+r = open("README.md").read()
+k = '$ python3 covary.py --search "how often do you see friends" --dataset gss'
+blk = r[r.index(k):]
+blk = blk[:blk.index("```")].split("\n", 1)[1].rstrip()
+out = subprocess.run(["python3", "covary.py", "--search",
+                      "how often do you see friends", "--dataset", "gss"],
+                     capture_output=True, text=True).stdout
+real = "\n".join(out.rstrip().split("\n")[:len(blk.split("\n"))])
+sys.exit(0 if blk == real else 1)
+EOF
+  then pass=$((pass+1)); echo "  ok   README search transcript matches real output"
+  else fail=$((fail+1)); echo "  FAIL README search transcript no longer matches"; fi
+
   # Coverage floor. A partially fetched source builds a labels.db that answers
   # some searches and silently misses whole regions of a survey, which no
   # single-query test can see.

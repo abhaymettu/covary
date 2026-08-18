@@ -1,6 +1,6 @@
 # covary
 
-**Given the variables an analysis needs, which dataset-years measured them on the
+**Which variables ask what you mean, and which dataset-years measured them on the
 same respondents?**
 
 Two variables can each have n in the thousands in one survey year and a joint n
@@ -33,6 +33,21 @@ strata that dropped out:
 `numgiven` and `socfrend` have zero overlap in GSS 2004. They co-occur in 1985
 and 2024. Checking one year and generalising is how a viable design gets thrown
 away, which is what happened and why this exists.
+
+That is the question this tool was built for. But you cannot ask it until you
+know the survey calls the thing you mean `numgiven`, which is a wall everyone
+new to a survey hits first, so covary answers that half too:
+
+```bash
+$ python3 covary.py --search "how often do you see friends" --dataset gss
+  gss     bstvisit       how often does r visit best friend
+  gss     frivisit       how often visit closest friend
+  gss     newfrds        at these occasions, how often did r make new friends or acquaintences
+  gss     bstcall        how often does r call best friend
+```
+
+Search finds the name, the index says whether it was measured alongside what
+else you need. See [Finding the name in the first place](#finding-the-name-in-the-first-place).
 
 ## Why this gap is real
 
@@ -72,7 +87,7 @@ python3 covary.py --find gun --dataset brfss          # half-remembered a name
 |---|---|
 | `--min N` | minimum joint n per stratum |
 | `--min-year N` | minimum joint n for a whole compound group, e.g. a BRFSS year pooled over its states. Per-stratum is the wrong grain when the analyst pools, which is what they do |
-| `--why` | also report which variable was absent in each stratum that dropped out |
+| `--why` | also report which variable was absent in each stratum that dropped out, and print each variable's verbatim item wording |
 | `--all` | do not truncate the per-group list of strata |
 | `--json` | machine-readable, so the tool composes in a pipeline |
 | `--find PAT` | list indexed names containing PAT, then exit |
@@ -146,6 +161,50 @@ names uses them in that order, and never has to guess a name.
 
 `skills/covary/SKILL.md` tells an agent to check before designing an analysis.
 
+## Finding the name in the first place
+
+To ask whether two variables were co-administered you have to know the survey
+calls the thing you mean `numgiven`. Everyone new to a survey hits that wall
+before they hit the co-administration wall, and so does every agent.
+
+```
+$ python3 covary.py --search "firearm storage in the home" --dataset brfss
+  brfss   FIREARM4       ANY FIREARMS IN HOME
+  brfss   FIREARM5       ANY FIREARMS IN HOME
+  brfss   GUNLOAD        ANY FIREARMS LOADED
+  brfss   LOADULK2       ANY LOADED FIREARMS ALSO UNLOCKED
+```
+
+Three different questions, now distinguishable. The one-line description also
+prints under every variable in normal output, and `--why` adds the verbatim item
+wording where the agency published it.
+
+**The text is the agencies' own, and its quality is theirs too.** GSS ships the
+full interviewer script and NORC's subject tags via `gssrdoc`, so GSS search
+works well. NHANES publishes a description per variable, and BRFSS publishes
+only a terse upper-case SAS label, so BRFSS search is adequate rather than good.
+No amount of code fixes that.
+
+| dataset | labelled | source |
+|---|---|---|
+| GSS | 6,918 / 6,918 | `gssrdoc::gss_doc`, verbatim wording plus subject tags |
+| NHANES | 11,935 / 12,388 | CDC per-component variable list |
+| BRFSS | 1,037 / 1,037 | SAS label in the XPT header |
+
+**Ranking is a text match and says nothing about co-administration.** Search
+tells you which variables are about a topic. Whether they were put to the same
+respondents is the other question, and it is the one the index answers.
+
+The text lives in `labels.db`, which is derived, regenerable, and deliberately
+not named `covary_*.db`: that glob is what `covary.py` unions into its views and
+what `audit.log` records hashes for. A clone without it behaves exactly as covary
+did before this existed, because the index is the product and the text is an
+enhancement.
+
+```bash
+Rscript build_labels.R && python3 pack_labels.py
+```
+
 ## Coverage
 
 | dataset | strata | variables | presence bits | stratum |
@@ -209,50 +268,6 @@ is kept in the home, `GUNLOAD` and `LOADULK2` are the storage items. covary woul
 happily confirm that two variables were measured together while you were asking
 about the wrong two. That is what the text layer below is for.
 
-## Finding the name in the first place
-
-To ask whether two variables were co-administered you have to know the survey
-calls the thing you mean `numgiven`. Everyone new to a survey hits that wall
-before they hit the co-administration wall, and so does every agent.
-
-```
-$ python3 covary.py --search "firearm storage in the home" --dataset brfss
-  brfss   FIREARM4       ANY FIREARMS IN HOME
-  brfss   FIREARM5       ANY FIREARMS IN HOME
-  brfss   GUNLOAD        ANY FIREARMS LOADED
-  brfss   LOADULK2       ANY LOADED FIREARMS ALSO UNLOCKED
-```
-
-Three different questions, now distinguishable. The one-line description also
-prints under every variable in normal output, and `--why` adds the verbatim item
-wording where the agency published it.
-
-**The text is the agencies' own, and its quality is theirs too.** GSS ships the
-full interviewer script and NORC's subject tags via `gssrdoc`, so GSS search
-works well. NHANES publishes a description per variable, and BRFSS publishes
-only a terse upper-case SAS label, so BRFSS search is adequate rather than good.
-No amount of code fixes that.
-
-| dataset | labelled | source |
-|---|---|---|
-| GSS | 6,918 / 6,918 | `gssrdoc::gss_doc`, verbatim wording plus subject tags |
-| NHANES | 11,935 / 12,388 | CDC per-component variable list |
-| BRFSS | 1,037 / 1,037 | SAS label in the XPT header |
-
-**Ranking is a text match and says nothing about co-administration.** Search
-tells you which variables are about a topic. Whether they were put to the same
-respondents is the other question, and it is the one the index answers.
-
-The text lives in `labels.db`, which is derived, regenerable, and deliberately
-not named `covary_*.db`: that glob is what `covary.py` unions into its views and
-what `audit.log` records hashes for. A clone without it behaves exactly as covary
-did before this existed, because the index is the product and the text is an
-enhancement.
-
-```bash
-Rscript build_labels.R && python3 pack_labels.py
-```
-
 ## Rebuilding
 
 Only needed to add a survey year. Requires R and a Python venv with duckdb.
@@ -262,6 +277,18 @@ Rscript build_gss.R && Rscript build_nhanes.R && Rscript build_brfss.R
 .venv/bin/python pack.py
 Rscript audit.R
 ```
+
+The text layer rebuilds separately and does not need the parquet index:
+
+```bash
+Rscript build_labels.R && python3 pack_labels.py
+```
+
+It writes `.cache/labels_<dataset>.csv` and packs them into `labels.db`, and it
+is resumable per dataset, so delete the CSV for the one you want refetched.
+`pack_labels.py` prints coverage against the presence index, which is the only
+thing that catches a partially fetched source: that failure builds a `labels.db`
+answering some searches while silently missing whole regions of a survey.
 
 `index/` is a 2.0GB parquet layer, one row per (respondent, variable). It is the
 readable source of truth that `audit.R` checks against CDC and gssr, and it is
