@@ -205,6 +205,22 @@ enhancement.
 Rscript build_labels.R && python3 pack_labels.py
 ```
 
+## What it catches
+
+All figures below are all-year marginals as the tool prints them, not single-year
+figures. Run the command yourself; the numbers should reproduce exactly.
+
+| | marginal n, all years | joint n | mechanism |
+|---|---|---|---|
+| GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004, 1,526 in 1985 | split ballot |
+| NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | 2,842 to 4,659 per stratum | fasting subsample |
+| BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 in 2023, plus 920 in 1 of 54 in 2022 | state optional modules |
+
+Each variable's question prints beside it, which is what stops the next mistake
+up the chain: `FIREARM5` is whether a firearm is kept in the home, `GUNLOAD` and
+`LOADULK2` are the storage items. Confirming two of those were measured together
+is no help if the construct you wanted was a third one.
+
 ## Coverage
 
 | dataset | strata | variables | presence bits | stratum |
@@ -251,22 +267,6 @@ phone, 218 multimode, 3,521 web and no in-person interviews at all. `mode` is no
 part of the stratum, so a 2021 n reads as a like-for-like continuation of a phone
 series when it is not. Joint n is still exact, because presence is per respondent.
 Comparability across 2018 and 2021 is not, and covary will not tell you so.
-
-## What it catches
-
-All figures below are all-year marginals as the tool prints them, not single-year
-figures. Run the command yourself; the numbers should reproduce exactly.
-
-| | marginal n, all years | joint n | mechanism |
-|---|---|---|---|
-| GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004, 1,526 in 1985 | split ballot |
-| NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | 2,842 to 4,659 per stratum | fasting subsample |
-| BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 in 2023, plus 920 in 1 of 54 in 2022 | state optional modules |
-
-A caution the tool used to be unable to give you: `FIREARM5` is whether a firearm
-is kept in the home, `GUNLOAD` and `LOADULK2` are the storage items. covary would
-happily confirm that two variables were measured together while you were asking
-about the wrong two. That is what the text layer below is for.
 
 ## Rebuilding
 
