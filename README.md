@@ -115,9 +115,17 @@ Rscript audit.R 6 40 2023    # also verify BRFSS 2023 against CDC
 ```
 
 The audit re-reads the original sources rather than checking the index against
-itself, because a wrong index is still perfectly self-consistent. Three real
-bugs, all silent, were found this way and are documented in `HANDOFF.md`. The
-one worth naming: a reader that applied value-label translation returned NA for
-any code without a codebook entry, understating presence by up to 7.7% on
-questionnaire variables while every headline number stayed correct, because those
+itself, because a wrong index is still perfectly self-consistent. `full` mode
+re-downloads everything and checks every variable: 6,918 GSS variables, 1,443
+NHANES tables, 4,242 BRFSS variables across 13 years, and all 222,373 bitmaps.
+
+Two silent bugs were found this way and are written up in `DECISIONS.md`. The one
+worth naming: a reader applied value-label translation, so any code without a
+codebook entry came back as NA, understating presence by up to 7.7% on
+questionnaire variables. Every headline number stayed correct, because those
 happened to use continuous variables.
+
+The audit has since had four bugs of its own, which is more than the index had.
+Each looked exactly like a data bug. That is the argument for exhaustive mode and
+for `nhanes_scope.R`, which exists so the builder and the audit cannot disagree
+about what is in scope.
