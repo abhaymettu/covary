@@ -76,7 +76,13 @@ def pack(only=None):
           with s as (select * from read_parquet(?) where dataset = ? and stratum = ?),
                r as (select unit_id, cast(row_number() over (order by unit_id) - 1 as int) pos
                      from (select distinct unit_id from s))
-          select s.variable, r.pos from s join r on s.unit_id = r.unit_id
+          -- distinct, because one variable can legitimately arrive from more than
+          -- one file for the same respondent and stratum: NHANES publishes some
+          -- measures in both a per-cycle table and a pooled one, and rehoming the
+          -- pooled rows to their real cycle makes the pair collide. Without this,
+          -- pop counts the row twice while the bitmap sets the bit once, and
+          -- --verify reports the db as corrupt. Presence is a bit, not a tally.
+          select distinct s.variable, r.pos from s join r on s.unit_id = r.unit_id
           order by s.variable
         """, [IDX, ds, st]).fetchall()
         if not rows:
@@ -138,6 +144,24 @@ def verify(n_pairs=40, seed=0):
     rng = random.Random(seed)
     con = duckdb.connect(); con.execute("set memory_limit='6GB'")
     bad = 0
+
+    # 0. no duplicate keys in the parquet index itself. A duplicate inflates pop
+    # while the bitmap sets the bit once, which surfaces below as "corrupt bits"
+    # and sends you looking at the packer instead of the index.
+    # Per file. Grouping all 1.16 billion rows in one pass exhausts memory, and
+    # a stratum never spans files, so per file is both cheaper and sufficient.
+    dup = 0
+    for f in sorted(glob.glob(IDX)):
+        n = con.execute(
+            "select count(*) - count(distinct (stratum, unit_id, variable)) "
+            "from read_parquet(?)", [f]).fetchone()[0]
+        if n:
+            dup += n
+            print(f"  DUPLICATE KEYS: {os.path.basename(f)} has {n:,}")
+    if dup:
+        bad += 1
+    else:
+        print("index: no duplicate keys in any file")
 
     for path in sorted(glob.glob(DB.format("*"))):
         ds = os.path.basename(path)[7:-3]

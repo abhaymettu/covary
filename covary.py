@@ -56,6 +56,27 @@ def connect(dataset=None):
 # What the second part of a compound stratum actually is, per dataset.
 UNIT = {"brfss": "states"}
 
+# Strata that contain the same physical people under identifiers that cannot be
+# matched. CDC renumbers SEQN for the pre-pandemic release, so 2017-2020 shares no
+# identifier with 2017-2018 while covering those respondents plus the partial
+# 2019-2020 collection. Presence cannot detect this, and the marginal is a plain
+# sum, so a reader who adds these strata counts real people twice. Merging is not
+# possible here, unlike the pooled spans whose SEQNs are shared; a warning is the
+# honest limit.
+PHYSICAL_OVERLAP = {("nhanes", "2017-2020"): ("2017-2018",)}
+
+
+def overlap_warning(rows):
+    """Strata in this result that describe some of the same people."""
+    have = {(ds, st) for ds, st, *_ in rows}
+    out = []
+    for (ds, st), others in PHYSICAL_OVERLAP.items():
+        if (ds, st) in have:
+            clash = [o for o in others if (ds, o) in have]
+            if clash:
+                out.append((ds, st, clash))
+    return out
+
 
 def resolve(db, vars_):
     """Fix case, and refuse to guess when case alone is ambiguous.
@@ -448,6 +469,10 @@ def main():
         if why and (why[0] or why[1]):
             print("\nstrata that dropped out:")
             print("\n".join(show_absences(why, cap)))
+        for ds, st, clash in overlap_warning(usable):
+            print(f"\n  warning: {ds} {st} and {', '.join(clash)} describe some of the")
+            print("  same people under different respondent ids. Do not pool them or add")
+            print("  their n together. Pick one.")
         return 0
 
     # Nothing usable. Say only what the index can support, then say what to do

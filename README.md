@@ -115,8 +115,13 @@ claude mcp add covary -- python3 "$PWD/mcp_server.py"
 | dataset | strata | variables | presence bits | stratum |
 |---|---|---|---|---|
 | GSS | 35 | 6,918 | 35.3M | year |
-| NHANES | 14 | 12,388 | 160.1M | cycle, 1999-2000 to 2021-2023 |
+| NHANES | 12 | 12,388 | 160.1M | cycle, 1999-2000 to 2021-2023 |
 | BRFSS | 689 | 1,037 | 1.01B | year\|state, 2011-2023 |
+
+A stratum is defined by respondent identity, not by the file a variable arrived
+in. NHANES publishes pooled files spanning several cycles, and where CDC keeps the
+original SEQNs those respondents are filed under their own cycle rather than the
+pooled label. Filing them separately once understated a real joint n by 40x.
 
 `stratum` is the unit within which co-administration is decided. It is the year
 for GSS, the cycle for NHANES, and `year|state` for BRFSS, because a BRFSS module
@@ -212,8 +217,13 @@ Rscript audit.R 6 40 2023    # also verify BRFSS 2023 against CDC
 
 The audit re-reads the original sources rather than checking the index against
 itself, because a wrong index is still perfectly self-consistent. `full` mode
-re-downloads everything and checks every variable: 6,918 GSS variables, 1,597
-NHANES tables, 4,242 BRFSS variables across 13 years, and all 229,240 bitmaps.
+re-downloads everything and re-derives every count from the source files: every
+GSS variable, every NHANES table in the manifest that has a respondent id, every
+BRFSS variable in all thirteen years, and every bitmap. It prints the counts it
+actually reached, and this page does not repeat them, because a number written in
+prose drifts away from the code that produces it. That happened here: the table
+count was recorded as 1,597 in one file and 1,544 in another, describing the same
+run.
 
 Three silent bugs were found this way and are written up in `DECISIONS.md`. The one
 worth naming: a reader applied value-label translation, so any code without a
@@ -223,13 +233,14 @@ happened to use continuous variables.
 
 **The evidence ships, so you do not have to take this on faith.** `index/` is
 gitignored, so a fresh clone cannot run `audit.R` or `pack.py --verify` without a
-multi-hour rebuild, which made every claim on this page unverifiable. `audit.log`
-is the full output of `Rscript audit.R full` against the committed db, dated, with
-the sha256 of each db file at the end. Check that what you cloned is what was
-audited:
+multi-hour rebuild, which made every claim on this page unverifiable. `audit.log` is written by `Rscript audit.R full` itself: the full run output,
+dated, with the sha256 of each db file it verified at the top. It used to be
+assembled by hand, which meant this page described an artifact no code produced
+and the link between the log and the shipped files rested on whoever pasted the
+hashes. Check that what you cloned is what was audited:
 
 ```bash
-shasum -a 256 covary_*.db && tail -5 audit.log
+shasum -a 256 covary_*.db && head -12 audit.log
 ```
 
 The audit has since had four bugs of its own, which is more than the index had.

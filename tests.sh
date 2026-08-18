@@ -91,6 +91,29 @@ if python3 covary.py numgiven agape1 --dataset gss --min 0 2>&1 \
   fail=$((fail+1)); echo "  FAIL a split ballot is described as a skip pattern"
 else pass=$((pass+1)); echo "  ok   no mechanism asserted for a split ballot"; fi
 
+echo "nhanes pooled strata"
+t 0 "pooled-file variable joins its own cycle"  SSALB RIAGENDR --dataset nhanes
+g "pooled span no longer appears as a stratum"  "1999-2000" SSALB --dataset nhanes
+# 1999-2004 and 2007-2012 are the same respondents as their component cycles, so
+# they must not survive as strata of their own
+if python3 covary.py SSALB --dataset nhanes 2>&1 | grep -qE "1999-2004|2007-2012"; then
+  fail=$((fail+1)); echo "  FAIL a pooled span is still its own stratum"
+else pass=$((pass+1)); echo "  ok   pooled spans dissolved into their cycles"; fi
+
+g "warns when strata share people under different ids" "same" RIAGENDR BMXBMI --dataset nhanes
+
+# A variable published in both a per-cycle and a pooled NHANES table used to land
+# twice after rehoming, inflating pop above the popcount. Cheap proxy for it here;
+# pack.py --verify does the exhaustive version.
+if python3 - <<'PY' 2>/dev/null; then pass=$((pass+1)); echo "  ok   no duplicate keys in the packed index"
+import sqlite3, glob, os, sys
+for f in glob.glob(os.path.join(os.path.dirname("."), "covary_*.db")):
+    db = sqlite3.connect(f)
+    n = db.execute("select count(*) - count(distinct stratum||char(1)||variable) from bm").fetchone()[0]
+    if n: sys.exit(1)
+PY
+else fail=$((fail+1)); echo "  FAIL duplicate (stratum, variable) keys in the packed index"; fi
+
 echo "mcp server contract"
 m() {  # m <description> <pattern> <json>
   desc=$1; pat=$2; json=$3

@@ -91,14 +91,45 @@ silently deleted the finding.
   existed to keep two copies of a rule that should not have existed at all. It
   is deleted. Nothing is now excluded by table name; a table with no `SEQN` is
   still skipped, because there is no respondent to be present.
-- **Pooled files keep their own span.** `2017-2020` pre-pandemic and `1999-2004`
-  are separate strata, not folded into a two-year cycle. They are a different
-  respondent set, and folding them would overstate joint n.
+- **Pooled files are filed by respondent identity, corrected 2026-08-18.** The
+  original rule was "pooled files keep their own span, they are a different
+  respondent set, and folding them would overstate joint n". That was true of one
+  pooled file and false of the others, and I generalised from the one I checked,
+  which is the mistake this whole tool exists to catch.
+
+  Measured across the index: `1999-2004` has 22,284 respondents and all 22,284 of
+  them are already in 1999-2000, 2001-2002 or 2003-2004. `2007-2012` likewise, all
+  380. CDC keeps the original SEQNs for those. Only `2017-2020` is renumbered, and
+  it shares zero identifiers with `2017-2018`.
+
+  Filing a shared-SEQN respondent under the pooled label put them in a stratum
+  nothing else could reach, because bit positions are assigned per stratum and no
+  AND can cross that boundary. `SSALB x RIAGENDR` reported a joint n of 539 against
+  a true 21,846 and exited 0. A 40x understatement, in the pessimistic direction
+  this file calls disqualifying, on exactly the rare-biomarker-by-demographics
+  design that would send someone to this tool in the first place. 85 NHANES
+  variables exist only in pooled files.
+
+  So a respondent's stratum is now the cycle whose own files contain that SEQN, and
+  a pooled file contributes its variables to whichever cycle each respondent
+  already belongs to. This is exact, not an approximation: the SEQNs are the same
+  people. Where no cycle claims the SEQN, as with the renumbered pre-pandemic file,
+  the pooled span correctly stays its own stratum. The rule lives in
+  `nhanes_strata.R` and is shared by the builder and the audit.
+
+  `2017-2020` still describes some of the same physical people as `2017-2018` under
+  identifiers that cannot be matched, so the marginal counts them twice and the two
+  must never be pooled. Presence cannot detect that, so covary warns when both
+  appear in one result. A warning is the honest limit here.
 - **A cycle with any unfetchable table is not written.** See the bugs below.
-- Tables with no `SEQN` are skipped: 33 of them, all pooled-sample lab files keyed
-  on `SAMPLEID`/`POOLID` where one row is a pool of many people, plus food, drug
+- Tables with no `SEQN` are skipped. They are pooled-sample lab files keyed on
+  `SAMPLEID` or `POOLID`, where one row is a pool of many people, plus food, drug
   and variable code lookups. A pooled sample has no individual respondent, so it
-  cannot answer a co-administration question.
+  cannot answer a co-administration question. The count is deliberately not written
+  down here: it was recorded as 33, adding dietary brought more lookup tables in,
+  and a hardcoded count in prose drifts silently away from the code. `audit.R`
+  reports how many of the manifest's tables it actually checked on every run, which
+  is the number that cannot go stale.
 
 - **GSS `mode` is documented, not indexed.** GSS went multimode in 2021: that
   year is 293 phone, 218 multimode, 3,521 web and no in-person at all, and 2022

@@ -100,6 +100,8 @@ one_table <- function(i) {
   }))
 }
 
+source("nhanes_strata.R")   # shared with audit.R
+
 for (cyc in unique(man$Years)) {
   out <- file.path("index", paste0("nhanes_", cyc, ".parquet"))
   if (file.exists(out)) { cat("have", cyc, "\n"); next }
@@ -123,4 +125,26 @@ for (cyc in unique(man$Years)) {
   write_parquet(pres, out, compression = "zstd")
   cat("  wrote", out, ":", nrow(pres), "pairs,",
       round(file.size(out) / 1e6, 1), "MB\n")
+}
+
+# Pooled files keep the SEQNs of the cycles they were drawn from, so their rows
+# belong in those cycles. Done as a final pass because a pooled span's respondents
+# live in cycles that may not have been written when the pooled file was read.
+# See nhanes_strata.R for why filing them separately understated a real joint n
+# by 40x.
+cat("rehoming pooled-file rows\n")
+for (p in names(NHANES_POOLED_PARTS)) {
+  f <- file.path("index", paste0("nhanes_", p, ".parquet"))
+  if (!file.exists(f)) next
+  pooled <- read_parquet(f)
+  homes <- bind_rows(lapply(NHANES_POOLED_PARTS[[p]], function(c) {
+    g <- file.path("index", paste0("nhanes_", c, ".parquet"))
+    if (file.exists(g)) distinct(read_parquet(g), unit_id) |> mutate(home = c) else NULL
+  }))
+  if (!nrow(homes)) next
+  moved <- pooled |> left_join(homes, by = "unit_id") |>
+    mutate(stratum = coalesce(home, stratum)) |> select(-home) |>
+    distinct() |> arrange(variable, stratum)
+  write_parquet(moved, f, compression = "zstd")
+  cat("  ", p, ":", sum(moved$stratum != p), "of", nrow(moved), "rows rehomed\n")
 }
