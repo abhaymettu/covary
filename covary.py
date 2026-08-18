@@ -411,6 +411,21 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
     return out
 
 
+# How to tell the reader to ask for more. The CLI has flags; an agent has
+# arguments. Scrubbing flag names out of finished text failed three rounds in a
+# row because each round emitted one from a new place, so the phrasing is chosen
+# where it is written instead.
+HINTS = {
+    "all":  ("use --all",                    "ask again with fewer variables"),
+    "why":  ("--why for all of them",        "ask again for fewer strata"),
+    "min0": ("run with --min 0",             "call again with min_n 0"),
+}
+
+
+def hint(key, for_agent):
+    return HINTS[key][1 if for_agent else 0]
+
+
 def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=False):
     """Render one answer. The ONLY place a result is turned into words.
 
@@ -496,8 +511,8 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
             L.append("  gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an earlier or")
             L.append("  later administration is invisible here. And a question skipped by a")
             L.append("  filter is absent for that reason, not because it was left off the")
-            L.append("  instrument. Ask again with a threshold of 0 to see strata where all")
-            L.append("  of these were collected but no respondent has them all.")
+            L.append(f"  instrument. {hint('min0', for_agent).capitalize()} to see strata")
+            L.append("  where all of these were collected but no respondent has them all.")
         zeros = [r for r in (rows if min_n == 0
                              else joint(db, vars_, dataset, 0)) if r[2] == 0]
         if zeros:
@@ -528,7 +543,7 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
         # while --help still advertised it as opt-in.
         L.extend(show_absences(why, cap if detail else min(3, lim)))
         if not detail and (len(why[0]) > 3):
-            L.append(f"    ({len(why[0]) - 3} more; --why for all of them)")
+            L.append(f"    ({len(why[0]) - 3} more; {hint('why', for_agent)})")
 
     # Caveats. Rendered here so neither interface can forget them.
     mn = mode_note(db, usable or rows)
@@ -543,7 +558,9 @@ def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=
         L.append("  and note the per-variable n above sums both. Pick one.")
 
     if for_agent:
-        L = [l.replace("(CLI: --all)", "(ask again with fewer variables)")
+        # show_joint and show_absences build their own truncation notice and have
+        # no interface argument, so those two strings are still rewritten here.
+        L = [l.replace("(CLI: --all)", f"({hint('all', True)})")
               .replace(", use --all", "") for l in L]
     return L, bool(usable)
 

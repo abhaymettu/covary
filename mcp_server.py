@@ -16,7 +16,7 @@ Register it with:
 import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from covary import connect, marginals, report, resolve, suggest, DBS
+from covary import connect, marginals, report, resolve, suggest, all_names, DBS
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -38,6 +38,7 @@ def validate(a):
         return "variables is required and must be a non-empty array of names"
     if not all(isinstance(x, str) and x.strip() for x in v):
         return "every entry in variables must be a non-empty string"
+    a["variables"] = [x.strip() for x in v]   # strip, do not merely test that it would
     if any(len(x) > 64 for x in v):
         # names are echoed back; an 8MB "name" produced an 8MB reply
         return "a variable name cannot exceed 64 characters"
@@ -140,6 +141,8 @@ def handle(req):
         return {"jsonrpc": "2.0", "id": None,
                 "error": {"code": -32600, "message": "batch requests are not supported"}}
     m, rid = req.get("method"), req.get("id")
+    if rid is None and m and m.startswith("notifications/"):
+        return None
     p = req.get("params")
     if p is None:
         p = {}

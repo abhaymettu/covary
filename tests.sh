@@ -170,6 +170,23 @@ m "non-object params does not kill the process" '"code": -32602' \
   '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":"x"}'
 m "over-long variable name is rejected" '"code": -32602' \
   '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}}'
+# An unknown name is the most likely thing an agent does with this tool, and the
+# whole not-found branch was dead over MCP for a round because all_names was not
+# imported. 65 tests passed with seven MCP cases and none sent a bad name.
+m "unknown name over mcp suggests a real one" 'did you mean' \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["numgivn"]}}}'
+m "unknown name over mcp is an error, not a verdict" '"isError": true' \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["numgivn"]}}}'
+m "padded names are stripped, not rejected" 'numgiven' \
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["  numgiven  ","socfrend"],"dataset":"gss"}}}'
+
+# no CLI flag may appear in an agent-facing reply. Three rounds running, one
+# leaked from a location the previous scrub did not know about.
+if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["FIREARM5","ACEDEPRS"],"dataset":"brfss","min_n":0}}}' \
+   | python3 mcp_server.py | grep -qE '\-\-why|\-\-all|\-\-min|\-\-dataset'; then
+  fail=$((fail+1)); echo "  FAIL a CLI flag leaked into an agent reply"
+else pass=$((pass+1)); echo "  ok   no CLI flag leaks into an agent reply"; fi
+
 m "real query still answers" 'VA' \
   '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["GUNLOAD","ACEDEPRS"],"dataset":"brfss"}}}'
 
