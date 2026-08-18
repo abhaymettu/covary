@@ -70,15 +70,16 @@ split ballot. It is a heuristic, not proof, and the output says so.
 - **All continuous cycles**, 1999-2000 through 2021-2023. The question people
   bring is "which cycle can I use", so truncating to recent cycles removes the
   answer.
-- **Dietary excluded, and my original reason for it was wrong.** I excluded
-  `DR*` and `DS*` because they carry several rows per SEQN and I assumed presence
-  would not mean the same thing there. The exhaustive audit showed that reasoning
-  does not hold: NHANES has plenty of multi-row tables outside dietary, with
-  audiometry (`AUXAR_*`) at about 12 rows per respondent, and the index handles
-  them correctly because presence dedups by respondent. So dietary is a scope
-  limitation, not a principled exclusion, and it could be added with a rebuild.
-  CDC's dietary listing does not cover 2021-2023, so there is a `^(DR|DS)` prefix
-  backstop alongside the listing.
+- **Dietary is now included, and my original reason for excluding it was wrong.**
+  I excluded `DR*` and `DS*` because they carry several rows per SEQN and I
+  assumed presence would not mean the same thing there. The exhaustive audit
+  showed that reasoning does not hold: NHANES has plenty of multi-row tables
+  outside dietary, with audiometry (`AUXAR_*`) at about 12 rows per respondent,
+  and the index handles them correctly because presence dedups by respondent.
+  So the exclusion was never principled, only untested, and `nhanes_scope.R`
+  existed to keep two copies of a rule that should not have existed at all. It
+  is deleted. Nothing is now excluded by table name; a table with no `SEQN` is
+  still skipped, because there is no respondent to be present.
 - **Pooled files keep their own span.** `2017-2020` pre-pandemic and `1999-2004`
   are separate strata, not folded into a two-year cycle. They are a different
   respondent set, and folding them would overstate joint n.
@@ -108,6 +109,9 @@ year.
   prints hundreds of lines. "4 of 52 states" is the actionable answer anyway.
 - CDC ships the file with a trailing space in the name (`LLCP2023.XPT `), so the
   builder matches loosely.
+- **The FIPS state map lives in `fips.R`**, sourced by the builder and the audit.
+  It used to be pasted into both, which is the same drift that caused one of the
+  audit bugs below.
 
 ## Two storage layers
 
@@ -189,6 +193,36 @@ trust the audit over the data would have been wrong twice.
 
 The second is the reason exhaustive mode exists. It also corrected a factual
 belief I had written down about the dietary files, above.
+
+## What a zero is allowed to mean
+
+A NONE is a verdict, and for a long time it was the last thing covary said. That
+is the wrong place to stop: the analyst's next question is never "is it dead", it
+is "what do I give up". So a NONE now carries three more things, all computed from
+bitmaps that were already in memory.
+
+- **Leave one out.** The best stratum reachable by dropping each single variable,
+  best drop first. Single drops only. Every subset is 2^n answers nobody reads,
+  and in practice one variable carries the whole failure.
+- **Absence, attributed.** Which requested variable was never collected in each
+  stratum that dropped out, rolled up per year. BRFSS 2021 is the case that made
+  this necessary: five states ran `GUNLOAD` without `ACEDEPRS`, eleven ran
+  `ACEDEPRS` without `GUNLOAD`, none ran both. "The module never ran here" and
+  "both ran and no respondent has both" have different remedies, and covary used
+  to print them identically.
+- **Collected but disjoint, counted separately** from absent, using the filter
+  signature above.
+
+Strata where none of the requested variables were collected are counted in one
+line rather than listed. A stratum with none of them is not about the question.
+
+## Grain
+
+`--min` thresholds a single stratum. That is the wrong grain for BRFSS, where the
+analyst pools states within a year and would have kept a small state that a
+per-stratum threshold discards. `--min-year` thresholds the rolled-up group
+instead. Both exist because both are real: a state fixed effect needs the
+per-stratum number, a pooled estimate needs the group total.
 
 ## Deliberately not doing
 
