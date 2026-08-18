@@ -39,6 +39,9 @@ def validate(a):
         return "variables is required and must be a non-empty array of names"
     if not all(isinstance(x, str) and x.strip() for x in v):
         return "every entry in variables must be a non-empty string"
+    if any(len(x) > 64 for x in v):
+        # names are echoed back; an 8MB "name" produced an 8MB reply
+        return "a variable name cannot exceed 64 characters"
     if len(v) > MAX_VARS:
         return f"at most {MAX_VARS} variables per call, got {len(v)}"
     d = a.get("dataset")
@@ -65,7 +68,7 @@ TOOL = {
         "means the design is not estimable as stated. Before telling a user their "
         "design is dead, check the returned notes: the questions may co-occur below "
         "the min_n you passed, may have been asked outside the indexed years, or may "
-        "be separated by a skip pattern rather than by design."
+        "be separated by a skip pattern or a split ballot rather than absent."
     ),
     "inputSchema": {
         "type": "object",
@@ -99,7 +102,12 @@ def run(variables, dataset=None, min_n=1):
 
     variables = list(dict.fromkeys(variables))   # a repeat used to force a false NONE
     db = connect(dataset)
-    variables, notes = resolve(db, variables)   # case, shared with the CLI
+    variables, notes, ambiguous = resolve(db, variables)   # case, shared with the CLI
+    if ambiguous:
+        return "\n".join(
+            [f"Ambiguous: {v!r} differs only by case from {', '.join(c)}, which are "
+             f"in different datasets." for v, c in ambiguous]
+            + ["Set `dataset`, or spell the name as that dataset spells it."]), True
     marg = marginals(db, variables, dataset)
     missing = [v for v in variables if v not in {r[0] for r in marg}]
     if missing:
@@ -125,6 +133,12 @@ def run(variables, dataset=None, min_n=1):
         lines.append(
             f"\nThese variables span {', '.join(sorted(datasets))}. A stratum belongs to one "
             "dataset, so this set can never have a joint n. Set `dataset` to one of them.")
+
+    if len(datasets) > 1 and not dataset:
+        # The span note above IS the answer. Printing NOT USABLE plus a
+        # leave-one-out under it invites exactly the misread this tool exists
+        # to prevent.
+        return "\n".join(lines), False
 
     rows = joint(db, variables, dataset, min_n)
     usable = [r for r in rows if r[2] > 0]
@@ -152,16 +166,18 @@ def run(variables, dataset=None, min_n=1):
             zero = [r for r in joint(db, variables, dataset, 0) if r[3]]
             if zero:
                 lines.append(
-                    f"Note: {len(zero)} stratum or strata had all of these collected "
-                    "with perfectly disjoint respondents, which is the signature of a "
-                    "skip pattern rather than a design gap. These questions were "
-                    "administered.")
+                    f"Note: {len(zero)} stratum or strata collected all of these and "
+                    "contain a pair of variables with no respondent in common. A split "
+                    "ballot and a skip pattern both look exactly like this and cannot "
+                    "be told apart from presence alone, so the codebook decides which "
+                    "it is. Do not report either mechanism to the user as established.")
         # What to give up, and where each stratum went. The decision on a NOT
         # USABLE is which variable to drop, not whether to give up, and an agent
         # that is only told "no" will report the design as dead.
-        loo = leave_one_out(db, variables, dataset)
+        loo = leave_one_out(db, variables, dataset, min_n)
         if loo:
-            lines.append("\nDropping one variable makes it usable again:")
+            lines.append(f"\nBest reachable by dropping one variable "
+                         f"(at min_n={min_n}):")
             for d, ds, st, n in loo:
                 lines.append(f"  without {d}: {ds} {st} n={n}")
         why = absences(db, variables, dataset, datasets)
@@ -173,7 +189,9 @@ def run(variables, dataset=None, min_n=1):
     why = absences(db, variables, dataset, datasets)
     denom = denominators(db, dataset)
     lines.append(f"\nUsable strata, every variable present on the same respondent (min_n={min_n}):")
-    lines.extend(show_joint(usable, denom))
+    lines.extend(l.replace("(CLI: --all)", "(ask again with fewer variables to see all)")
+                  .replace(", use --all", "")
+                 for l in show_joint(usable, denom, cap=12))
     if why[0] or why[1]:
         lines.append("\nStrata that dropped out, absent variable named per group:")
         lines.extend(show_absences(why))
@@ -188,15 +206,23 @@ def handle(req):
         return {"jsonrpc": "2.0", "id": None,
                 "error": {"code": -32600, "message": "batch requests are not supported"}}
     m, rid = req.get("method"), req.get("id")
+    p = req.get("params")
+    if p is None:
+        p = {}
+    if not isinstance(p, dict):
+        # Guarding `req` and not `params` left the same crash one field down.
+        # A str or list here used to reach .get() and take the process with it,
+        # losing every later request on a long-lived stdio connection.
+        return {"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32602, "message": "params must be an object"}}
     if m == "initialize":
         return {"jsonrpc": "2.0", "id": rid, "result": {
-            "protocolVersion": req.get("params", {}).get("protocolVersion", "2025-06-18"),
+            "protocolVersion": p.get("protocolVersion", "2025-06-18"),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "covary", "version": "0.1.0"}}}
     if m == "tools/list":
         return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [TOOL]}}
     if m == "tools/call":
-        p = req.get("params", {})
         if p.get("name") != TOOL["name"]:
             return {"jsonrpc": "2.0", "id": rid,
                     "error": {"code": -32602, "message": f"no such tool: {p.get('name')}"}}

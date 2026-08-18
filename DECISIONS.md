@@ -62,8 +62,19 @@ disqualifying in the translation-bug write-up below. Two things changed rather t
 one: the wording everywhere now says what the index can support, and `joint()`
 detects the filter signature. Within a stratum where every requested variable was
 collected, a joint n of zero with `popcount(a|b) == pop_a + pop_b` means no
-respondent appears in more than one of them, which is a skip pattern and not a
-split ballot. It is a heuristic, not proof, and the output says so.
+respondent appears in more than one of them.
+
+**That is all it means, corrected again 2026-08-18.** The first version of this
+paragraph said perfect disjointness was "a skip pattern and not a split ballot".
+That is backwards. A split ballot partitions respondents, so perfect disjointness
+is its definition, and the check fired on GSS `numgiven` x `socfrend` in 2004 and
+announced that those questions WERE administered together. Version one of this
+tool was wrong pessimistically and said so in its output. Version two was wrong
+optimistically and did not, which is worse, because nothing downstream contradicts
+a confident yes. The check now reports the observation and names both mechanisms
+as possible. The comparison is also pairwise rather than mutual, since requiring
+every variable to be disjoint from every other meant adding one ordinary covariate
+silently deleted the finding.
 
 ## NHANES
 

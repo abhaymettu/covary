@@ -74,10 +74,11 @@ $ python3 covary.py PREGNANT PROSTATE --dataset brfss
 ...
   1 stratum collected all of these and still has
   no respondent with all of them.
-  1 of those is perfectly disjoint, the signature of a skip pattern
-  rather than a module that never ran. These questions WERE administered.
+  1 of those has a pair of variables with no respondent in common at all.
+  A split ballot and a skip pattern both look exactly like this, so
+  presence cannot tell them apart. The codebook decides which it is.
 
-  dropping one variable:
+  best reachable by dropping one variable, at min 1:
     without PROSTATE     brfss 2018|NY n=6685
     without PREGNANT     brfss 2011|HI n=2480
 
@@ -131,11 +132,16 @@ A question skipped because of a filter, one only asked of respondents who answer
 yes to something earlier, is absent for that reason, and covary cannot tell it from
 a question that was never on the instrument. BRFSS `PREGNANT` and `PROSTATE` in
 2011 Hawaii were on the same questionnaire, put to the same 7,606 people, and have
-a joint n of zero because of a sex filter. Run that pair with `--min 0` and covary
-will now flag it as "collected but disjoint, likely a skip pattern", because
-perfectly disjoint respondent sets are a filter signature and a split ballot does
-not look like that. But the flag is a heuristic, and a zero always deserves the
-codebook before you conclude a design is dead.
+a joint n of zero because of a sex filter. Run that pair with `--min 0` and covary reports that a pair of the variables has
+no respondent in common at all.
+
+It reports that and stops, because an earlier version went further and was wrong.
+It claimed perfect disjointness was a skip-pattern signature "and a split ballot
+does not look like that". A split ballot is a partition, so perfect disjointness
+is exactly what it looks like, and the heuristic fired on GSS `numgiven` x
+`socfrend` in 2004, the example this README opens with, telling the reader those
+questions were administered together. They were not. Presence alone cannot
+separate the two mechanisms, and the codebook is what does.
 
 **GSS mode, for the same reason.** GSS went multimode in 2021: that year is 293
 phone, 218 multimode, 3,521 web and no in-person interviews at all. `mode` is not

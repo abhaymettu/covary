@@ -58,27 +58,40 @@ UNIT = {"brfss": "states"}
 
 
 def resolve(db, vars_):
-    """Fix case, and suggest near names for the rest.
+    """Fix case, and refuse to guess when case alone is ambiguous.
 
     GSS variables are lowercase and NHANES and BRFSS are uppercase, so mixing them
-    up is the normal case, not an edge case. NORC's own GSS Data Explorer displays
-    NUMGIVEN while gssr stores numgiven. A tool that answers "not in the index" to
-    the name printed in the official codebook is answering the wrong question.
+    up is the normal case. NORC's own Data Explorer prints NUMGIVEN while gssr
+    stores numgiven.
 
-    Case is corrected out loud rather than silently, since quiet correction is its
-    own way of being wrong.
+    Eleven names exist in more than one dataset differing only by case: age, sex,
+    sex1, marital, children, race2, nummen, numwomen, physhlth, feelnerv, internet.
+    An earlier version built a dict keyed on the lowered name, so one spelling won
+    arbitrarily and `covary.py sex marital` answered from BRFSS. Five correctly
+    typed GSS names came back as a dead design because two were silently swapped.
+    A coin flip is the worst possible behaviour here, so an ambiguous name is now
+    an error that names both candidates and asks for --dataset.
     """
-    have = {r[0] for r in db.execute(
-        "select distinct variable from bm where lower(variable) in ({})".format(
-            ",".join("?" * len(vars_))), [v.lower() for v in vars_])}
-    lower = {h.lower(): h for h in have}
-    fixed, notes = [], []
+    rows = db.execute(
+        "select distinct dataset, variable from bm where lower(variable) in ({})".format(
+            ",".join("?" * len(vars_))), [v.lower() for v in vars_]).fetchall()
+    by_lower = {}
+    for ds, name in rows:
+        by_lower.setdefault(name.lower(), set()).add(name)
+
+    fixed, notes, ambiguous = [], [], []
     for v in vars_:
-        h = lower.get(v.lower())
-        if h and h != v:
+        cands = by_lower.get(v.lower(), set())
+        if v in cands or not cands:
+            fixed.append(v)                       # exact hit, or unknown, handled later
+        elif len(cands) == 1:
+            h = next(iter(cands))
             notes.append(f"  reading {v} as {h}")
-        fixed.append(h or v)
-    return fixed, notes
+            fixed.append(h)
+        else:
+            ambiguous.append((v, sorted(cands)))
+            fixed.append(v)
+    return fixed, notes, ambiguous
 
 
 def all_names(db):
@@ -123,12 +136,22 @@ def marginals(db, vars_, dataset):
 def joint(db, vars_, dataset, min_n):
     """Joint n per stratum: popcount of the AND across every requested variable.
 
-    Returns (dataset, stratum, n, filtered). `filtered` marks a stratum where every
-    requested variable was collected, no respondent has them all, and the sets are
-    perfectly disjoint. That is the signature of a skip pattern, not a split ballot:
-    the questions WERE administered, and respondents were routed past one of them by
-    their own earlier answer. BRFSS PREGNANT x PROSTATE in 2011 Hawaii is the worked
-    case, one instrument and 7,606 people.
+    Returns (dataset, stratum, n, disjoint). `disjoint` marks a stratum where every
+    requested variable was collected, no respondent has them all, and no respondent
+    appears in more than one of them.
+
+    That is an OBSERVATION, not a diagnosis, and an earlier version of this code got
+    it exactly backwards. It claimed perfect disjointness was the signature of a skip
+    pattern "and a split ballot does not look like that". A split ballot is a
+    partition, so perfect disjointness is precisely what it looks like. The heuristic
+    fired on GSS 2004 numgiven x socfrend, the example the README opens with, and
+    told the reader the questions WERE administered together. They were not. Being
+    confidently wrong in the optimistic direction is worse than the pessimism it
+    replaced, because nothing downstream contradicts it.
+
+    So `disjoint` now means only what it measures: these respondent sets do not
+    overlap at all. A skip pattern and a ballot rotation both produce it, and the
+    codebook is what tells them apart.
 
     Strata with n of 0 are returned only when min_n is 0, since they are never
     usable. They are worth showing because "collected but disjoint" and "never
@@ -160,18 +183,18 @@ def joint(db, vars_, dataset, min_n):
         elif min_n == 0:
             # Disjoint check: a union whose popcount equals the sum of popcounts
             # means no respondent appears in more than one of these variables.
-            tot = union = 0
-            acc2 = None
-            for p, b in got.values():
-                v = int.from_bytes(zlib.decompress(b), "little")
-                tot += p
-                acc2 = v if acc2 is None else acc2 | v
-            union = acc2.bit_count() if acc2 else 0
-            out.append((ds, st, 0, union == tot))
+            # Pairwise, not mutual. Requiring every variable to be disjoint from
+            # every other meant adding one universally-asked covariate silently
+            # deleted the finding, which is what specifying a real model does.
+            vs = [int.from_bytes(zlib.decompress(b), "little") for _, b in got.values()]
+            pairwise = any(
+                (vs[i] & vs[j]) == 0 and vs[i] and vs[j]
+                for i in range(len(vs)) for j in range(i + 1, len(vs)))
+            out.append((ds, st, 0, pairwise))
     return sorted(out)
 
 
-def leave_one_out(db, vars_, dataset, k=3):
+def leave_one_out(db, vars_, dataset, min_n=1, k=3):
     """When nothing works, which single variable is responsible?
 
     That is the decision an analyst is actually making on a NONE: not "is this
@@ -180,13 +203,19 @@ def leave_one_out(db, vars_, dataset, k=3):
 
     Single drops only. Every subset is 2^n answers nobody reads, and the useful
     case is one variable carrying the whole failure.
+
+    Honours min_n. It did not, so the header said dropping a variable "makes it
+    usable again" over numbers below the threshold the caller had just set. A blind
+    test showed a model read n=2701 under that header and told the user it was
+    "comfortably over 5000". Every other assertion here was audited against min_n
+    after the first round; this one was added afterwards and skipped it.
     """
     if len(vars_) < 2:
         return []
     out = []
     for v in vars_:
         rest = [x for x in vars_ if x != v]
-        best = max(joint(db, rest, dataset, 1), key=lambda r: r[2], default=None)
+        best = max(joint(db, rest, dataset, min_n), key=lambda r: r[2], default=None)
         if best:
             out.append((v, best[0], best[1], best[2]))
     return sorted(out, key=lambda r: -r[3])[:k]
@@ -269,7 +298,7 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
     """
     if not any("|" in st for _, st, _, _ in rows):
         for ds, st, n, filt in rows:
-            note = "   collected but disjoint, likely a skip pattern" if filt else ""
+            note = "   a pair here has no respondent in common" if filt else ""
             print(f"  {ds:<7} {st:<12} n={n}{note}")
         return out
 
@@ -289,8 +318,7 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
               f"{f' of {of}' if of else ''} {UNIT.get(ds, 'strata')}  n={total}")
         print(f"          {shown}")
         if any(f for _, _, f in subs):
-            print("          collected but disjoint, likely a skip pattern rather than"
-                  " a design gap")
+            print("          collected, with no respondent in more than one")
     return out
 
 
@@ -333,14 +361,21 @@ def main():
             print(f"{len(hits)} name{'' if len(hits) == 1 else 's'} matching {a.find!r}")
         return 0 if hits else 2
 
-    # Dedupe. joint() keys results by variable name, so a repeated name made the
-    # match count fall short of len(vars_) and silently discarded every stratum,
-    # reporting a live design as dead. Order preserved for stable output.
+    a.variables, notes, ambiguous = resolve(db, a.variables)
+    # Dedupe AFTER resolve, not before. joint() keys results by variable name, so a
+    # repeated name made the match count fall short of len(vars_) and discarded
+    # every stratum, reporting a live design as dead. Deduping raw argv fixed the
+    # exact string `happy socfrend happy` and left `happy HAPPY socfrend` broken in
+    # the same way, one layer down.
     a.variables = list(dict.fromkeys(a.variables))
-
-    a.variables, notes = resolve(db, a.variables)
     for n in notes:
         say(n)
+    if ambiguous:
+        for v, cands in ambiguous:
+            print(f"ambiguous: {v!r} differs only by case from {', '.join(cands)}, "
+                  f"which are in different datasets", file=sys.stderr)
+        print("  pass --dataset, or spell it as that dataset spells it", file=sys.stderr)
+        return 2
     marg = marginals(db, a.variables, a.dataset)
 
     missing = [v for v in a.variables if v not in {r[0] for r in marg}]
@@ -403,6 +438,13 @@ def main():
         print(f"\njointly on the same respondents (min {a.min}"
               f"{f', pooled min {a.min_year}' if a.min_year else ''}):")
         print("\n".join(show_joint(usable, denominators(db, a.dataset), cap)))
+        if a.min == 0:
+            z = [r for r in rows if r[2] == 0]
+            if z:
+                print("\nalso collected together, with no respondent having all of them:")
+                print("\n".join(show_joint(z, denominators(db, a.dataset), cap)))
+                print("  A pair with no respondent in common is a split ballot or a skip")
+                print("  pattern. Both look identical here, so the codebook decides.")
         if why and (why[0] or why[1]):
             print("\nstrata that dropped out:")
             print("\n".join(show_absences(why, cap)))
@@ -412,10 +454,13 @@ def main():
     # about it. "Never administered together" is a claim about the world and it
     # was wrong three ways: below a high --min, outside the indexed year range,
     # and for questions skipped by a filter rather than absent from the instrument.
-    zeros = rows if a.min == 0 else joint(db, a.variables, a.dataset, 0)
+    # joint(min_n=0) returns everything, so filter. Reporting len() of that as
+    # the zero count contradicted the line above it three lines later.
+    zeros = [r for r in (rows if a.min == 0 else joint(db, a.variables, a.dataset, 0))
+             if r[2] == 0]
     disjoint = sum(1 for r in zeros if r[3])
     why = absences(db, a.variables, a.dataset, datasets)
-    loo = leave_one_out(db, a.variables, a.dataset)
+    loo = leave_one_out(db, a.variables, a.dataset, a.min)
     near = joint(db, a.variables, a.dataset, 1)
     best = max(near, key=lambda r: r[2]) if near else None
 
@@ -435,7 +480,12 @@ def main():
         }, indent=2))
         return 1
 
+    if not loo and len(a.variables) > 1:
+        pass
     print(f"\njointly on the same respondents (min {a.min}):")
+    # Print zeros whenever --min 0 asked for them. They used to appear only in the
+    # not-usable branch, so GSS 2004, the split ballot the README opens with,
+    # appeared in no covary output at all and exited 0.
     if a.min == 0 and zeros:
         # --min 0 asked to see them; they are still not a usable design.
         print("\n".join(show_joint(zeros, denominators(db, a.dataset), cap)))
@@ -455,11 +505,15 @@ def main():
         print(f"\n  {len(zeros)} {s} collected all of these and still {'has' if len(zeros) == 1 else 'have'}")
         print("  no respondent with all of them.")
         if disjoint:
-            print(f"  {disjoint} of those {'is' if disjoint == 1 else 'are'} perfectly disjoint,"
-                  " the signature of a skip pattern")
-            print("  rather than a module that never ran. These questions WERE administered.")
+            print(f"  {disjoint} of those {'has' if disjoint == 1 else 'have'} a pair of"
+                  " variables with no respondent in common at all.")
+            print("  A split ballot and a skip pattern both look exactly like this, so")
+            print("  presence cannot tell them apart. The codebook decides which it is.")
+    if not loo and len(a.variables) > 1:
+        print(f"\n  no single variable is responsible: dropping any one of them")
+        print(f"  still leaves nothing at min {a.min}.")
     if loo:
-        print("\n  dropping one variable:")
+        print(f"\n  best reachable by dropping one variable, at min {a.min}:")
         for d, ds, st, n in loo:
             print(f"    without {d:<12} {ds} {st} n={n}")
     if why[0] or why[1]:

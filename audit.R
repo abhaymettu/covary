@@ -80,8 +80,12 @@ if (!all(c("iap", "don't know", "no answer", "skipped on web") %in% sent)) {
   ok("gss: iap/dk/na/skipped-on-web all map to NA, so presence means asked and answered")
 }
 
-# NHANES and BRFSS keep refusals as codes (7/9, 77/99) and leave skips blank, so
-# non-missing is exactly "this question was put to this respondent".
+# NHANES and BRFSS keep refusals as codes (7/9, 77/99) and leave skips blank. That
+# is NOT the same as "this question was put to this respondent": a respondent
+# routed past an item by their own earlier answer was administered the module and
+# is still blank. DECISIONS.md retracts the stronger claim; this file used to
+# repeat it. Nothing here tests skip-vs-not-administered, in any dataset, and that
+# gap is the honest limit of this audit.
 
 # ---- GSS against source, exact ---------------------------------------------
 cat("\ngss against gssr source, exact match\n")
