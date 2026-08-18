@@ -24,17 +24,37 @@ SUMMARISED = {
                      " ones that matter are checked by denominator_shown() below",
     "usable":        "compound strata roll up to a count and a member list",
     "zero":          "same rollup",
-    "leave_one_out": "the best few drops, not every subset",
-    "suggestions":   "values printed individually under 'did you mean'",
-    "marginals":     "container; its leaves are checked",
-    "notes": "container", "warnings": "container",
+    # These said "container; its leaves are checked". They were not: leaves()
+    # skipped the whole subtree, so six of ten entries were carrying a
+    # justification for an exemption they were not performing. Now the
+    # containers are traversed and only the named leaves above are exempt.
     "collected_but_no_overlap": "printed as counts, and omitted when zero",
 }
 
-# Verdict machinery, rendered as wording rather than as values.
-MACHINERY = {"ok", "reason", "exit", "is_error", "dataset", "min_year",
-             "kind", "shares_with", "double_counts_people",
-             "pair_with_no_overlap", "strata_list", "first", "last", "min"}
+# Rendered as wording rather than as a value, each with a reason. This list was
+# one collective label over a mixed bag, and it exempted `first` and `last` -
+# which are the leaves of `coverage`, the key added specifically so a bound would
+# reach the reader. So the mechanism built to make this class extinct carried an
+# exemption sized exactly to the surviving instance. Every entry now says what it
+# is and why, and anything that is a value rather than machinery is gone.
+MACHINERY = {
+    "ok":       "the verdict, rendered as wording",
+    "reason":   "ditto",
+    "exit":     "a process exit code, not prose",
+    "is_error": "a protocol flag, not prose",
+    "dataset":  "named on every row",
+    "min":      "rendered inside the threshold label",
+    "min_year": "ditto, and only when set",
+    "kind":     "note and warning types render as sentences",
+    "shares_with": "rendered inside the warning sentence",
+    "double_counts_people": "rendered as a marker",
+    "pair_with_no_overlap": "rendered as a phrase",
+    "strata_list": "rendered joined",
+    "first":    "a coverage/marginal endpoint; coverage_shown() checks it on the"
+                " branches where it bounds the verdict, and a marginal's span is"
+                " rendered as a range or a list",
+    "last":     "ditto",
+}
 
 QUERIES = [
     ["numgiven", "socfrend", "--dataset", "gss"],
@@ -82,6 +102,27 @@ def denominator_shown(D, text):
     return missing
 
 
+# coverage bounds a verdict only where the verdict is "absent". Elsewhere the
+# index span is noise. So the exemption is conditional and checked, rather than
+# blanket: on these branches it MUST be rendered.
+COVERAGE_REQUIRED_ON = {"not_found", "never_together"}
+
+
+def coverage_shown(D, text):
+    """The index's year span must reach the reader wherever it bounds the answer.
+
+    HSSEX is a real NHANES III variable and this index starts in 1999. The tool
+    said "not found", offered an unrelated near match, and never mentioned it had
+    a bound, while `coverage` sat in the same payload and printed on a sibling
+    branch. That is the whole failure class this file exists for, and it survived
+    six rounds because `first` and `last` were on a blanket allowlist.
+    """
+    if D.get("reason") not in COVERAGE_REQUIRED_ON:
+        return []
+    return [c for c in D.get("coverage", [])
+            if c["first"] not in text or c["last"] not in text]
+
+
 def main():
     bad = 0
     for q in QUERIES:
@@ -96,6 +137,10 @@ def main():
             print(f"  FAIL {' '.join(q)}: --json emitted no parseable payload")
             bad += 1
             continue
+        for c in coverage_shown(D, text):
+            print(f"  FAIL {' '.join(q)}: reason={D['reason']} but the "
+                  f"{c['dataset']} span {c['first']}-{c['last']} never reaches the text")
+            bad += 1
         for g, n in denominator_shown(D, text):
             print(f"  FAIL {' '.join(q)}: {g[0]} {g[1]} has {n} strata, "
                   f"text never says 'of {n}'")

@@ -42,8 +42,12 @@ def connect(dataset=None):
         want = os.path.join(HERE, f"covary_{dataset}.db")
         files = [f for f in files if f == want]
         if not files:
-            sys.exit(f"no index for dataset {dataset!r}. have: "
-                     f"{', '.join(os.path.basename(f)[7:-3] for f in sorted(glob.glob(DBS))) or 'none'}")
+            have = ', '.join(os.path.basename(f)[7:-3]
+                             for f in sorted(glob.glob(DBS))) or 'none'
+            print(f"no index for dataset {dataset!r}. have: {have}", file=sys.stderr)
+            # exit 2, not 1. sys.exit(str) yields 1, which is documented as "no
+            # stratum has them all" - a substantive verdict, returned for a typo.
+            sys.exit(REASONS["not_found"]["exit"])
     if not files:
         sys.exit(f"no index: {DBS}\nbuild the parquet index, then run: python pack.py")
 
@@ -355,8 +359,9 @@ def show_absences(why, cap=12):
     for ds, head, absent, n in (rows[:cap] if cap else rows):
         out.append(f"    {ds:<7} {head:<12} {n} strat{'um' if n == 1 else 'a'}"
                    f" never collected {', '.join(absent)}")
-    if cap and len(rows) > cap:
-        out.append(f"    +{len(rows) - cap} more groups (CLI: --all)")
+    # No truncation notice here. render() emits one, with the escape named and
+    # suppressed when the caller already passed it. Two notices for one
+    # truncation, split by an unrelated line, is what this replaced.
     for ds, n in sorted(none_at_all.items()):
         out.append(f"    {ds:<7} {n} more collected none of them, so they are not"
                    f" about this question")
@@ -630,6 +635,16 @@ def render(D, cap=12, for_agent=False, detail=False):
             sg = D["suggestions"].get(m)
             L.append(f"  did you mean: {', '.join(sg)}" if sg else
                      f"  no near match for {m!r}")
+        # State the bound. A name absent from this index is not a name absent
+        # from the survey: HSSEX is a real NHANES III variable and this index
+        # starts in 1999. The coverage span was already in the payload and
+        # printed on the never_together branch, and withheld from the branch
+        # whose answer sounds most final.
+        if D.get("coverage"):
+            L.append("  this index covers " + ", ".join(
+                f"{c['dataset']} {c['first']} to {c['last']}" for c in D["coverage"]))
+            L.append("  a name outside that span is absent from the index, not")
+            L.append("  necessarily from the survey")
         return L
 
     if D["reason"] == "ambiguous":
@@ -694,14 +709,18 @@ def render(D, cap=12, for_agent=False, detail=False):
         c = D.get("collected_but_no_overlap", {})
         if c.get("strata"):
             L.append("")
-            L.append(f"  {c['strata']} stratum or strata collected all of these and still")
-            L.append("  have no respondent with all of them.")
+            n_s = c["strata"]
+            L.append(f"  {n_s} strat{'um' if n_s == 1 else 'a'} collected all of these"
+                     f" and still {'has' if n_s == 1 else 'have'}")
+            L.append("  no respondent with all of them.")
             if D["min"] == 0 and D["zero"]:
                 L.extend(show_joint([(z["dataset"], z["stratum"], 0,
                                       z["pair_with_no_overlap"]) for z in D["zero"]],
                                     denom_map(D), cap))
             if c.get("disjoint"):
-                L.append(f"  {c['disjoint']} of those contain a pair with no respondent in common.")
+                n_d = c["disjoint"]
+                L.append(f"  {n_d} of those {'contains' if n_d == 1 else 'contain'} a pair"
+                         " with no respondent in common.")
                 L.append("  A split ballot and a skip pattern both look exactly like this, so")
                 L.append("  the codebook decides which it is.")
         if D["leave_one_out"]:
@@ -718,7 +737,10 @@ def render(D, cap=12, for_agent=False, detail=False):
     if why and (why[0] or why[1]):
         L.append("")
         L.append("strata that dropped out:")
-        n_show = (10 ** 9) if (detail or cap is None) else min(3, lim)
+        # --why widens this section; --all widens the stratum lists. They used
+        # to widen the same thing, so passing both made --why a no-op and the
+        # differential test could not see it.
+        n_show = (10 ** 9) if detail else min(3, lim)
         L.extend(show_absences(why, n_show))
         if len(why[0]) > n_show:
             h = hint('why', for_agent, already=detail)
@@ -738,8 +760,9 @@ def render(D, cap=12, for_agent=False, detail=False):
         L.append("  and note the per-variable n above sums both. Pick one.")
 
     if for_agent:
-        L = [l.replace("(CLI: --all)", f"({hint('all', True)})")
-              .replace(", use --all", "") for l in L]
+        h_all = hint('all', True, already=(cap is None))
+        L = [l.replace("(CLI: --all)", f"({h_all})" if h_all else "")
+              .replace(", use --all", f"; {h_all}" if h_all else "") for l in L]
     return L
 
 
@@ -803,8 +826,15 @@ def main():
         # this entirely: not_found was hand-built without a reason key, and
         # ambiguous printed to stderr and emitted no json at all, so a pipeline
         # doing `--json | jq` got a parse error instead of a verdict.
-        print(json.dumps({k: v for k, v in D.items() if not k.startswith("_")},
-                         indent=2))
+        # No _-prefixed keys exist, and none should: they were how the
+        # denominator and the absence rows reached the text without reaching the
+        # payload. Assert rather than filter, so a new one fails loudly instead
+        # of vanishing.
+        hidden = [k for k in D if k.startswith("_")]
+        if hidden:
+            sys.exit(f"internal: payload has private keys {hidden}, which would "
+                     "be hidden from --json. Make them public or drop them.")
+        print(json.dumps(D, indent=2))
     else:
         cap = None if a.all else 12
         out = render(D, cap, detail=a.why)

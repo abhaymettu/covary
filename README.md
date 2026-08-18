@@ -85,9 +85,9 @@ jointly on the same respondents (min 1):
   because it was left off the instrument. Run with --min 0
   to see strata where all were collected but no one has them all.
 
-  1 stratum or strata collected all of these and still
-  have no respondent with all of them.
-  1 of those contain a pair with no respondent in common.
+  1 stratum collected all of these and still has
+  no respondent with all of them.
+  1 of those contains a pair with no respondent in common.
   A split ballot and a skip pattern both look exactly like this, so
   the codebook decides which it is.
 
@@ -99,7 +99,6 @@ strata that dropped out:
     brfss   2011         52 strata never collected PROSTATE
     brfss   2012         53 strata never collected PROSTATE
     brfss   2013         53 strata never collected PROSTATE
-    +10 more groups (CLI: --all)
     (10 more; --why for all of them)
 ```
 
@@ -116,7 +115,7 @@ cases are distinct so a script can tell them apart:
 |---|---|
 | 0 | at least one stratum has every variable on the same respondents |
 | 1 | none does, at the `--min` you gave |
-| 2 | the question cannot be answered as asked: a name was not found, or the set spans datasets so no stratum could hold all of it |
+| 2 | the question cannot be answered as asked: a name was not found or is ambiguous, the named dataset does not exist, the set spans datasets so no stratum could hold it, or a `--find` matched nothing |
 
 As an MCP server, which is the interface that matters since agents walk into
 this failure constantly:

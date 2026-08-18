@@ -61,7 +61,7 @@ g "leave-one-out gives the reachable n"   "gss 1985 n=1526" big5a1 numgiven socf
 g "absence is attributed per year"        "2021         5 strata never collected ACEDEPRS" \
   GUNLOAD ACEDEPRS --dataset brfss --why
 g "mechanism is not asserted"             "codebook decides" PREGNANT PROSTATE --dataset brfss --min 0
-g "truncation is announced with its escape" "CLI: --all" big5a1 numgiven socfrend --dataset gss
+g "truncation is announced with its escape" "more; --why" big5a1 numgiven socfrend --dataset gss
 g "--all defeats truncation"              "1972" big5a1 numgiven socfrend --dataset gss --all
 
 if python3 covary.py PREGNANT PROSTATE --dataset brfss --json | python3 -c '
@@ -188,6 +188,14 @@ real = subprocess.run(["python3", "covary.py", "PREGNANT", "PROSTATE",
 assert blk == real
 PY
 else fail=$((fail+1)); echo "  FAIL README transcript no longer matches real output"; fi
+
+# A name absent from this index is not a name absent from the survey. HSSEX is a
+# real NHANES III variable and this index starts in 1999; the tool said "not
+# found" and never mentioned it had a bound, while coverage sat in the payload
+# and printed on a sibling branch.
+g "not_found states the index bound"  "this index covers" HSSEX --dataset nhanes
+t 2 "a bad --dataset is unanswerable, not a verdict"  numgiven --dataset nope
+t 2 "an unknown name is unanswerable"                 numgivn --dataset gss
 
 echo "payload, not prose"
 # Four review rounds found the same defect under four names: a fact in the text
