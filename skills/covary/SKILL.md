@@ -18,8 +18,8 @@ This happens by design, not by accident:
 - **NHANES** splits a cycle across ~130 component files, and subsamples (fasting
   labs, DXA) cover a fraction of the cycle. A respondent can complete the
   interview and never attend the MEC exam.
-- **BRFSS** optional modules are chosen state by state. A module with n=81,000
-  nationally may have run in 13 states.
+- **BRFSS** optional modules are chosen state by state. A module with n in the tens
+  of thousands nationally may have run in a handful of states.
 
 ICPSR's own variable database documents this as a limitation and tells you to
 read the codebook by hand. covary answers it from the data instead.
@@ -56,9 +56,14 @@ requested variable within one stratum. That is the real n the design has.
 
 - **A stratum is listed** with joint n at or above what the design needs: usable.
   Restrict the analysis to those strata and say so explicitly.
-- **NOT IDENTIFIED / NONE**: the variables were never administered together. No
-  modelling choice fixes this. Change the variables or the dataset, and tell the
-  user the design as stated cannot be estimated. Do not quietly proceed.
+- **NOT USABLE / NONE**: no respondent in the index is non-missing on all of them.
+  Usually the design is not estimable as stated, so do not quietly proceed. But do
+  not declare it dead before reading the notes covary returns with the result. Three
+  things produce an empty answer and only one of them is fatal: the variables may
+  co-occur below the `min_n` you passed, they may have been asked outside the
+  indexed years (GSS 1972-2024, NHANES 1999-2023, BRFSS 2011-2023), or they may be
+  separated by a skip pattern rather than by design. covary flags the last case when
+  it can detect it.
 - **The marginal n is much larger than the joint n**: normal and important. Base
   every power calculation and every reported n on the joint figure.
 

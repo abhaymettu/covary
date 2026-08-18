@@ -44,12 +44,26 @@ skipped the MEC exam is absent from exam variables, and the fasting-lab subsampl
 is a fraction of its cycle. Defining presence per variable handles both without a
 weights table.
 
-This is only correct if NA means "not administered" while a refusal is a real
-value. NHANES and BRFSS keep refusals as codes (7/9, 77/99) and leave skips
-blank, so non-missing is exactly "this question was put to this respondent". GSS
+NHANES and BRFSS keep refusals as codes (7/9, 77/99) and leave skips blank. GSS
 needed checking because `gssr` maps sentinels to NA itself; every sentinel label,
-`iap` included, resolves to NA. `audit.R` asserts this rather than assuming it,
-so the assumption breaks loudly if `gssr` ever changes.
+`iap` included, resolves to NA. `audit.R` asserts this rather than assuming it, so
+the assumption breaks loudly if `gssr` ever changes.
+
+**Where that definition stops, corrected 2026-08-18.** An earlier version of this
+file claimed non-missing is exactly "this question was put to this respondent".
+That does not follow, and user testing produced the counterexample: BRFSS
+`PREGNANT` and `PROSTATE`, 2011 Hawaii, same instrument and same 7,606 people,
+joint n of zero because of a sex filter. A respondent routed past an item by their
+own earlier answer WAS administered the module. Presence is item-level evidence and
+the claims built on it were design-level.
+
+The error runs pessimistic, which is the direction this file already calls
+disqualifying in the translation-bug write-up below. Two things changed rather than
+one: the wording everywhere now says what the index can support, and `joint()`
+detects the filter signature. Within a stratum where every requested variable was
+collected, a joint n of zero with `popcount(a|b) == pop_a + pop_b` means no
+respondent appears in more than one of them, which is a skip pattern and not a
+split ballot. It is a heuristic, not proof, and the output says so.
 
 ## NHANES
 
@@ -151,8 +165,8 @@ Two things made it disqualifying rather than annoying:
 
 1. **It ran the wrong direction.** Understated presence means reporting a design
    as underpowered when it is not, and failing a `--min` gate that should pass.
-   The pitch here is "trust this instead of the codebook", so being quietly
-   pessimistic converts a known unknown into a false certainty.
+   Being quietly pessimistic converts a known unknown into a false certainty,
+   which is worse than no tool.
 2. **The demo queries were blind to it.** `RIAGENDR`, `BMXBMI` and `LBXGLU` are
    continuous, so every headline number stayed correct while questionnaire
    variables were short. The validation looked perfect because it never touched

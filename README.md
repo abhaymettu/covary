@@ -55,8 +55,14 @@ python3 covary.py RIAGENDR BMXBMI LBXGLU --dataset nhanes
 python3 covary.py FIREARM5 ACEDEPRS --dataset brfss
 ```
 
-Exit status is 1 when no stratum supports the full set, so it gates a pipeline
-rather than only informing a human.
+Exit status gates a pipeline rather than only informing a human, and the three
+cases are distinct so a script can tell them apart:
+
+| exit | meaning |
+|---|---|
+| 0 | at least one stratum has every variable on the same respondents |
+| 1 | none does, at the `--min` you gave |
+| 2 | a variable name was not found, so nothing was tested |
 
 As an MCP server, which is the interface that matters since agents walk into
 this failure constantly:
@@ -73,7 +79,7 @@ claude mcp add covary -- python3 "$PWD/mcp_server.py"
 |---|---|---|---|---|
 | GSS | 35 | 6,918 | 35.3M | year |
 | NHANES | 14 | 11,213 | 122.6M | cycle, 1999-2000 to 2021-2023 |
-| BRFSS | 690 | 1,037 | 1.01B | year\|state, 2011-2023 |
+| BRFSS | 689 | 1,037 | 1.01B | year\|state, 2011-2023 |
 
 `stratum` is the unit within which co-administration is decided. It is the year
 for GSS, the cycle for NHANES, and `year|state` for BRFSS, because a BRFSS module
@@ -84,13 +90,31 @@ respondent who did the NHANES interview but skipped the MEC exam is correctly
 absent from exam variables, and the fasting-lab subsample is correctly a fraction
 of its cycle.
 
+**The limit of that definition, stated plainly.** Presence is item-level evidence.
+A question skipped because of a filter, one only asked of respondents who answered
+yes to something earlier, is absent for that reason, and covary cannot tell it from
+a question that was never on the instrument. BRFSS `PREGNANT` and `PROSTATE` in
+2011 Hawaii were on the same questionnaire, put to the same 7,606 people, and have
+a joint n of zero because of a sex filter. Run that pair with `--min 0` and covary
+will now flag it as "collected but disjoint, likely a skip pattern", because
+perfectly disjoint respondent sets are a filter signature and a split ballot does
+not look like that. But the flag is a heuristic, and a zero always deserves the
+codebook before you conclude a design is dead.
+
 ## What it catches
 
-| | marginal n | joint n | mechanism |
+All figures below are all-year marginals as the tool prints them, not single-year
+figures. Run the command yourself; the numbers should reproduce exactly.
+
+| | marginal n, all years | joint n | mechanism |
 |---|---|---|---|
-| GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004 | split ballot |
-| NHANES + `LBXGLU` | ~8,000 / cycle | ~3,000 | fasting subsample |
-| BRFSS `FIREARM5` x `ACEDEPRS` | 81,310 / 56,040 | 4 of 52 states | state optional modules |
+| GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004, 1,526 in 1985 | split ballot |
+| NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | ~8,000 to ~3,000 per cycle | fasting subsample |
+| BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 states, 2023 | state optional modules |
+
+A caution the tool cannot give you: `FIREARM5` is whether a firearm is kept in the
+home, `GUNLOAD` and `LOADULK2` are the storage items. covary will happily confirm
+that two variables were measured together while you are asking about the wrong two.
 
 ## Rebuilding
 
