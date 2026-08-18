@@ -14,8 +14,10 @@ thousands in one stratum and a joint n of zero.
   covary.py --find gun --dataset brfss               search names
   covary.py GUNLOAD ACEDEPRS --dataset brfss --json  machine-readable
 
-Exit status is 1 when no stratum supports the whole set, so it works as a gate in
-a pipeline rather than only as something a human reads.
+Exit status: 0 when at least one stratum carries every variable, 1 when none
+does, 2 when the question cannot be answered as asked (a name is unknown or
+ambiguous, or the set spans datasets so no stratum could hold it). --json carries
+the same verdict as `reason` and `exit`.
 
 Presence means non-missing on the actual variable. That is deliberately stricter
 than "the file exists": a respondent who did the NHANES interview but skipped the
@@ -416,8 +418,11 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
 # row because each round emitted one from a new place, so the phrasing is chosen
 # where it is written instead.
 HINTS = {
-    "all":  ("use --all",                    "ask again with fewer variables"),
-    "why":  ("--why for all of them",        "ask again for fewer strata"),
+    # The agent phrasings name a capability the tool actually has. They used to
+    # say "ask again with fewer variables", which answers a different question,
+    # so the flag name was gone and the unreachable capability was not.
+    "all":  ("use --all",             "call again with detail true"),
+    "why":  ("--why for all of them", "call again with detail true"),
     "min0": ("run with --min 0",             "call again with min_n 0"),
 }
 
@@ -426,192 +431,232 @@ def hint(key, for_agent):
     return HINTS[key][1 if for_agent else 0]
 
 
-def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=False):
-    """Render one answer. The ONLY place a result is turned into words.
+def analyze(db, vars_, dataset, min_n, min_year):
+    """Compute the whole answer as data. Builds no sentences.
 
-    Both interfaces call this. They used not to: `main` and the MCP `run`
-    each assembled their own text, so every caveat had to be remembered twice and
-    three rounds of testing found the same defect three times. The worst instance
-    shipped an unwarned double count to the agent interface while the CLI warned
-    correctly, and a fresh model added the two overlapping strata together and
-    handed a researcher an inflated N. A caveat that a caller can forget is not a
-    caveat.
+    This inversion is the fix for a defect found in four consecutive review
+    rounds under four different names. Every earlier version appended to a list
+    of lines and to a dict in two parallel manual passes, so every line was an
+    opportunity to forget the dict, and the omission always landed on whichever
+    caveat had been added most recently. Twice the docstring declared the class
+    closed on the same visit that forgot it.
 
-    Returns (lines, ok, data). `data` is the same answer as a structure, so
-    --json is a rendering of this computation rather than a second one. It was a
-    second one, and it therefore carried the single caveat a reviewer had named
-    and silently dropped the two they had not: the mode note and the
-    cross-dataset verdict. Consolidating the text renderer closed half a class
-    and left the other half open.
+    So: nothing here emits text, and render() below reads nothing but this
+    structure. A fact cannot reach the reader without being in the payload,
+    because the text is a function of the payload.
+
+    `reason` is the discriminator, and it is deliberately finer than ok/not ok:
+
+      ok                      at least one stratum carries every variable
+      below_threshold         they co-occur, but under the threshold you set
+      never_together          no stratum has them all, at any threshold
+      cross_dataset           the set spans datasets, so no stratum could
+      not_found               a name is not in the index
+      ambiguous              a name differs only by case across datasets
     """
-    L = []
-    lim = cap if cap is not None else 10 ** 9   # --all passes None
-    # Listing threshold, separate from the truncation cap. A range implies
-    # continuous coverage, which is wrong for four scattered GSS years and right
-    # for twelve consecutive NHANES cycles. Eight is where listing stops helping.
-    LIST_UPTO = 8
-    marg = marginals(db, vars_, dataset)
-    datasets = {r[1] for r in marg}
-
     D = {"variables": list(vars_), "dataset": dataset, "min": min_n,
-         "min_year": min_year, "notes": [], "warnings": []}
-    datasets0 = {r[1] for r in marg}
-    if len(datasets0) > 1 and not dataset:
+         "min_year": min_year, "notes": [], "warnings": [], "marginals": [],
+         "usable": [], "zero": [], "dropped": None, "leave_one_out": [],
+         "best_below_threshold": None, "not_found": [], "suggestions": {},
+         "ambiguous": [], "cross_dataset": None}
+
+    marg = marginals(db, vars_, dataset)
+    found = {r[0] for r in marg}
+    missing = [v for v in vars_ if v not in found]
+    if missing:
+        names = all_names(db)
+        D.update(not_found=missing,
+                 suggestions={m: suggest(db, m, names=names) for m in missing},
+                 reason="not_found", ok=False, exit=2)
+        return D
+
+    datasets = {r[1] for r in marg}
+    overlapping = []
+    if len(datasets) > 1 and not dataset:
         result_rows = []
     else:
-        _r0, result_rows = usable_strata(db, vars_, dataset, min_n, min_year)
-    L.append("per variable, ignoring co-administration:")
+        _all, result_rows = usable_strata(db, vars_, dataset, min_n, min_year)
+        overlapping = overlap_warning(result_rows)
+
     for v, ds, n, lo, hi, ns in marg:
-        # List the strata when they will fit. "1985 .. 2024, 4 strata" reads as
-        # continuous coverage and those four years are 1985, 1987, 2004 and 2024.
-        if ns <= min(lim, LIST_UPTO):
-            got = [r[0] for r in db.execute(
-                "select distinct substr(stratum,1,instr(stratum||'|','|')-1) from bm"
-                " where variable = ? and dataset = ? order by 1", (v, ds))]
-            span = ", ".join(got)
-        else:
-            span = f"{lo} .. {hi}, {ns} strata"
-        # Does this variable actually appear in a stratum that shares people with
-        # another? Checking the span endpoints missed it: BMXBMI spans 1999-2000
-        # to 2021-2023 and the overlapping stratum sits in the middle.
+        strata = [r[0] for r in db.execute(
+            "select distinct substr(stratum,1,instr(stratum||'|','|')-1) from bm"
+            " where variable = ? and dataset = ? order by 1", (v, ds))]
         vs = {r[0] for r in db.execute(
             "select distinct stratum from bm where variable = ? and dataset = ?", (v, ds))}
-        dbl = ""
-        for (d2, st), others in PHYSICAL_OVERLAP.items():
-            # only when the warning it points at will actually be printed, which
-            # depends on the RESULT strata, not on every stratum the variable has
-            if (d2 == ds and st in vs and any(o in vs for o in others)
-                    and any(r[0] == d2 and r[1] == st for r in result_rows)
-                    and any(r[0] == d2 and r[1] in others for r in result_rows)):
-                dbl = "  <- counts some people twice, see warning below"
-                break
-        L.append(f"  {v:<12} {ds:<7} n={n:<8} {span}{dbl}")
-        D.setdefault("marginals", []).append(
+        dbl = any(d2 == ds and st in vs and any(o in vs for o in others)
+                  and any(r[0] == d2 and r[1] == st for r in result_rows)
+                  and any(r[0] == d2 and r[1] in others for r in result_rows)
+                  for (d2, st), others in PHYSICAL_OVERLAP.items())
+        D["marginals"].append(
             {"variable": v, "dataset": ds, "n": n, "first": lo, "last": hi,
-             "strata": ns, "double_counts_people": bool(dbl)})
+             "strata": ns, "strata_list": strata if ns <= 8 else None,
+             "double_counts_people": dbl})
 
     if len(datasets) > 1 and not dataset:
-        L.append("")
-        msg = (f"These variables span {', '.join(sorted(datasets))}. A stratum belongs"
-               " to one dataset, so this set can never have a joint n. Name one dataset.")
-        L.append(msg)
-        # Not the same as a dead design, and --json used to report it as one:
-        # ok false, usable empty, exit 1, indistinguishable. That is the failure
-        # validate() exists to prevent, on a third interface.
         D.update(cross_dataset=sorted(datasets), reason="cross_dataset",
-                 usable=[], ok=False)
-        D["notes"].append(msg)
-        return L, False, D
+                 ok=False, exit=2)
+        return D
 
     rows, usable = usable_strata(db, vars_, dataset, min_n, min_year)
     why = absences(db, vars_, dataset, datasets)
-    label = threshold_label(min_n, min_year)
+    zeros = [r for r in (rows if min_n == 0 else joint(db, vars_, dataset, 0))
+             if r[2] == 0]
 
-    L.append("")
-    L.append(f"jointly on the same respondents ({label}):")
+    D["usable"] = [{"dataset": ds, "stratum": st, "n": n} for ds, st, n, _ in usable]
+    D["zero"] = [{"dataset": ds, "stratum": st, "pair_with_no_overlap": bool(f)}
+                 for ds, st, _, f in zeros]
+    D["collected_but_no_overlap"] = {"strata": len(zeros),
+                                     "disjoint": sum(1 for r in zeros if r[3])}
+    D["dropped"] = as_dropped(why)
+    D["_why"] = why                       # for the renderer only, stripped before json
 
     if usable:
-        L.extend(show_joint(usable, denominators(db, dataset), cap))
-        if min_n == 0:
-            z = [r for r in rows if r[2] == 0]
-            if z:
-                L.append("")
-                L.append("also collected together, with no respondent having all of them:")
-                L.extend(show_joint(z, denominators(db, dataset), cap))
-                L.append("  A split ballot and a skip pattern both look exactly like this,")
-                L.append("  so presence cannot tell them apart. The codebook decides.")
+        D.update(reason="ok", ok=True, exit=0)
     else:
-        L.append(f"  NONE. No respondent is non-missing on all of these in any stratum")
-        L.append(f"  covered by this index at {label}.")
-        # Look below the threshold, not inside the already-filtered rows. joint()
-        # applied min_n, so at a high threshold `rows` is empty and there is
-        # nothing left to point at.
         near = [r for r in joint(db, vars_, dataset, 1) if r[2] > 0]
         best = max(near, key=lambda r: r[2], default=None)
         if best:
-            L.append(f"  They DO co-occur below your threshold. Largest is {best[0]} "
-                     f"{best[1]} at n={best[2]}. Lower the threshold that excluded them"
-                     f"{' (--min-year)' if min_year and best[2] >= min_n else ''}.")
+            D["best_below_threshold"] = {"dataset": best[0], "stratum": best[1],
+                                         "n": best[2]}
+            D.update(reason="below_threshold", ok=False, exit=1)
         else:
-            L.append("  Before concluding these were never asked together: this index covers")
-            L.append("  gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an earlier or")
-            L.append("  later administration is invisible here. And a question skipped by a")
-            L.append("  filter is absent for that reason, not because it was left off the")
-            L.append(f"  instrument. {hint('min0', for_agent).capitalize()} to see strata")
-            L.append("  where all of these were collected but no respondent has them all.")
-        zeros = [r for r in (rows if min_n == 0
-                             else joint(db, vars_, dataset, 0)) if r[2] == 0]
-        if zeros:
-            n_dis = sum(1 for r in zeros if r[3])
+            D.update(reason="never_together", ok=False, exit=1)
+        D["leave_one_out"] = [{"drop": d, "dataset": ds2, "stratum": st, "n": n}
+                              for d, ds2, st, n in
+                              leave_one_out(db, vars_, dataset, min_n, min_year)]
+
+    mn = mode_note(db, usable or rows)
+    if mn:
+        D["notes"].append({"kind": "gss_mode", "strata": mn})
+    for ds, st, clash in overlapping:
+        D["warnings"].append({"kind": "same_people_different_ids",
+                              "dataset": ds, "stratum": st, "shares_with": clash})
+    return D
+
+
+def render(D, cap=12, for_agent=False, detail=False):
+    """Turn the structure into lines. Reads D and nothing else.
+
+    No database handle by design: if this function cannot reach the data, it
+    cannot say anything the payload does not contain.
+    """
+    lim = cap if cap is not None else 10 ** 9
+    L = []
+
+    if D["reason"] == "not_found":
+        where = f"dataset {D['dataset']}" if D["dataset"] else "any indexed dataset"
+        L.append(f"not found in {where}: {', '.join(D['not_found'])}")
+        if D["dataset"]:
+            L.append("  it may be real but belong to another dataset; ask without "
+                     "naming one")
+        for m in D["not_found"]:
+            sg = D["suggestions"].get(m)
+            L.append(f"  did you mean: {', '.join(sg)}" if sg else
+                     f"  no near match for {m!r}")
+        return L
+
+    if D["reason"] == "ambiguous":
+        for v, cands in D["ambiguous"]:
+            L.append(f"ambiguous: {v!r} differs only by case from "
+                     f"{', '.join(cands)}, which are in different datasets")
+        L.append("  name one dataset, or spell it as that dataset spells it")
+        return L
+
+    for n in D["notes"]:
+        if isinstance(n, str):
+            L.append(n)
+    L.append("per variable, ignoring co-administration:")
+    for m in D["marginals"]:
+        span = (", ".join(m["strata_list"]) if m["strata_list"]
+                else f"{m['first']} .. {m['last']}, {m['strata']} strata")
+        dbl = "  <- counts some people twice, see warning below" if m["double_counts_people"] else ""
+        L.append(f"  {m['variable']:<12} {m['dataset']:<7} n={m['n']:<8} {span}{dbl}")
+
+    if D["reason"] == "cross_dataset":
+        L.append("")
+        L.append(f"These variables span {', '.join(D['cross_dataset'])}. A stratum "
+                 "belongs to one dataset, so this set can never have a joint n. "
+                 "Name one dataset.")
+        return L
+
+    label = threshold_label(D["min"], D["min_year"])
+    L.append("")
+    L.append(f"jointly on the same respondents ({label}):")
+
+    if D["reason"] == "ok":
+        rows = [(u["dataset"], u["stratum"], u["n"], False) for u in D["usable"]]
+        L.extend(show_joint(rows, D.get("_denom", {}), cap))
+        if D["min"] == 0 and D["zero"]:
             L.append("")
-            L.append(f"  {len(zeros)} stratum or strata collected all of these and still have")
-            L.append("  no respondent with all of them.")
-            if n_dis:
-                L.append(f"  {n_dis} of those contain a pair with no respondent in common.")
+            L.append("also collected together, with no respondent having all of them:")
+            L.extend(show_joint([(z["dataset"], z["stratum"], 0,
+                                  z["pair_with_no_overlap"]) for z in D["zero"]],
+                                D.get("_denom", {}), cap))
+            L.append("  A split ballot and a skip pattern both look exactly like this,")
+            L.append("  so presence cannot tell them apart. The codebook decides.")
+    else:
+        L.append("  NONE. No respondent is non-missing on all of these in any stratum")
+        L.append(f"  covered by this index at {label}.")
+        b = D["best_below_threshold"]
+        if b:
+            which = "--min-year" if (D["min_year"] and b["n"] >= D["min"]) else "--min"
+            L.append(f"  They DO co-occur below your threshold. Largest is "
+                     f"{b['dataset']} {b['stratum']} at n={b['n']}. Lower "
+                     f"{which if not for_agent else 'the threshold'}, which is what "
+                     "excluded them.")
+        else:
+            L.append("  Before concluding these were never asked together: this index")
+            L.append("  covers gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an")
+            L.append("  earlier or later administration is invisible here. And a")
+            L.append("  question skipped by a filter is absent for that reason, not")
+            L.append(f"  because it was left off the instrument. {hint('min0', for_agent).capitalize()}")
+            L.append("  to see strata where all were collected but no one has them all.")
+        c = D.get("collected_but_no_overlap", {})
+        if c.get("strata"):
+            L.append("")
+            L.append(f"  {c['strata']} stratum or strata collected all of these and still")
+            L.append("  have no respondent with all of them.")
+            if c.get("disjoint"):
+                L.append(f"  {c['disjoint']} of those contain a pair with no respondent in common.")
                 L.append("  A split ballot and a skip pattern both look exactly like this, so")
                 L.append("  the codebook decides which it is.")
-        loo = leave_one_out(db, vars_, dataset, min_n, min_year)
-        if loo:
+        if D["leave_one_out"]:
             L.append("")
             L.append(f"  best reachable by dropping one variable, at {label}:")
-            for d, ds2, st, n in loo:
-                L.append(f"    without {d:<12} {ds2} {st} n={n}")
-        elif len(vars_) > 1:
+            for l in D["leave_one_out"]:
+                L.append(f"    without {l['drop']:<12} {l['dataset']} {l['stratum']} n={l['n']}")
+        elif len(D["variables"]) > 1:
             L.append("")
-            L.append(f"  no single variable is responsible: dropping any one of them still")
+            L.append("  no single variable is responsible: dropping any one of them still")
             L.append(f"  leaves nothing at {label}.")
 
+    why = D.get("_why")
     if why and (why[0] or why[1]):
         L.append("")
         L.append("strata that dropped out:")
-        # --why raises the cap on this section rather than gating it. The refactor
-        # made absences unconditional, which quietly turned --why into a no-op
-        # while --help still advertised it as opt-in.
-        # --all expands this section too. It used to be capped at 3 unless --why,
-        # so --all printed a notice naming a flag that could not expand it.
         n_show = lim if (detail or cap is None) else min(3, lim)
         L.extend(show_absences(why, n_show))
         if len(why[0]) > n_show:
             L.append(f"    ({len(why[0]) - n_show} more; {hint('why', for_agent)})")
 
-    # Caveats. Rendered here so neither interface can forget them.
-    mn = mode_note(db, usable or rows)
-    if mn:
+    for n in D["notes"]:
+        if isinstance(n, dict) and n["kind"] == "gss_mode":
+            L.append("")
+            L.append(f"  note: gss records an interview `mode` variable in "
+                     f"{', '.join(n['strata'])}. A joint n does not tell you the mode")
+            L.append("  was comparable across those years.")
+    for w in D["warnings"]:
         L.append("")
-        L.append(f"  note: gss records an interview `mode` variable in {', '.join(mn)}. A")
-        L.append("  joint n does not tell you the mode was comparable across those years.")
-        D["notes"].append({"kind": "gss_mode", "strata": mn})
-    for ds, st, clash in overlap_warning(usable or rows):
-        L.append("")
-        L.append(f"  warning: {ds} {st} and {', '.join(clash)} contain the same people")
-        L.append("  under different respondent ids. Do not pool them or add their n together,")
+        L.append(f"  warning: {w['dataset']} {w['stratum']} and "
+                 f"{', '.join(w['shares_with'])} contain the same people under")
+        L.append("  different respondent ids. Do not pool them or add their n together,")
         L.append("  and note the per-variable n above sums both. Pick one.")
-        D["warnings"].append({"kind": "same_people_different_ids",
-                              "dataset": ds, "stratum": st, "shares_with": clash})
 
     if for_agent:
-        # show_joint and show_absences build their own truncation notice and have
-        # no interface argument, so those two strings are still rewritten here.
         L = [l.replace("(CLI: --all)", f"({hint('all', True)})")
               .replace(", use --all", "") for l in L]
-    D.update(
-        usable=[{"dataset": ds, "stratum": st, "n": n} for ds, st, n, _ in usable],
-        zero=[{"dataset": ds, "stratum": st, "pair_with_no_overlap": bool(f)}
-              for ds, st, _, f in (rows if min_n == 0
-                                   else joint(db, vars_, dataset, 0)) if _ == 0],
-        dropped=as_dropped(why),
-        collected_but_no_overlap={
-            "strata": sum(1 for r in (rows if min_n == 0
-                                      else joint(db, vars_, dataset, 0)) if r[2] == 0),
-            "disjoint": sum(1 for r in (rows if min_n == 0
-                                        else joint(db, vars_, dataset, 0))
-                            if r[2] == 0 and r[3])},
-        leave_one_out=[{"drop": d, "dataset": ds2, "stratum": st, "n": n}
-                       for d, ds2, st, n in
-                       (leave_one_out(db, vars_, dataset, min_n, min_year)
-                        if not usable else [])],
-        ok=bool(usable), reason=D.get("reason", "ok" if usable else "not_usable"))
-    return L, bool(usable), D
+    return L
 
 
 def main():
@@ -644,9 +689,9 @@ def main():
     if a.find:
         hits = find(db, a.find)
         if a.json:
-            print(json.dumps({"find": a.find,
-                              "matches": [{"dataset": d, "variable": v} for d, v in hits]},
-                             indent=2))
+            print(json.dumps({"find": a.find, "reason": "find", "ok": bool(hits),
+                              "matches": [{"dataset": d, "variable": v}
+                                          for d, v in hits]}, indent=2))
         else:
             for d, v in hits:
                 print(f"  {d:<7} {v}")
@@ -654,53 +699,32 @@ def main():
         return 0 if hits else 2
 
     a.variables, notes, ambiguous = resolve(db, a.variables)
-    # Dedupe AFTER resolve, not before. joint() keys results by variable name, so a
-    # repeated name made the match count fall short of len(vars_) and discarded
-    # every stratum, reporting a live design as dead. Deduping raw argv fixed the
-    # exact string `happy socfrend happy` and left `happy HAPPY socfrend` broken in
-    # the same way, one layer down.
+    # Dedupe AFTER resolve. joint() keys by name, so a repeat made the match count
+    # fall short and discarded every stratum, reporting a live design as dead.
     a.variables = list(dict.fromkeys(a.variables))
-    for n in notes:
-        say(n)
-    if ambiguous:
-        for v, cands in ambiguous:
-            print(f"ambiguous: {v!r} differs only by case from {', '.join(cands)}, "
-                  f"which are in different datasets", file=sys.stderr)
-        print("  pass --dataset, or spell it as that dataset spells it", file=sys.stderr)
-        return 2
-    marg = marginals(db, a.variables, a.dataset)
-    missing = [v for v in a.variables if v not in {r[0] for r in marg}]
-    if missing:
-        names = all_names(db)          # one scan, however many names are unknown
-        near = {m: suggest(db, m, names=names) for m in missing}
-        if a.json:
-            print(json.dumps({"variables": a.variables, "ok": False,
-                              "not_found": missing, "suggestions": near}, indent=2))
-            return 2
-        where = f"dataset {a.dataset}" if a.dataset else "any indexed dataset"
-        print(f"not found in {where}: {', '.join(missing)}", file=sys.stderr)
-        if a.dataset:
-            print("  it may be real but belong to another dataset; retry without "
-                  "--dataset", file=sys.stderr)
-        for m in missing:
-            if near[m]:
-                print(f"  did you mean: {', '.join(near[m])}", file=sys.stderr)
-            else:
-                print(f"  no near match for {m!r}; try --find PATTERN", file=sys.stderr)
-        return 2   # a bad name is not a dead design; keep the exit codes distinct
 
-    lines, ok, data = report(db, a.variables, a.dataset, a.min, a.min_year, cap,
-                             detail=a.why)
-    if a.json:
-        data["notes"] = [n.strip() if isinstance(n, str) else n
-                         for n in ([n.strip() for n in notes] + data["notes"])]
-        print(json.dumps(data, indent=2))
+    if ambiguous:
+        D = {"variables": a.variables, "dataset": a.dataset, "min": a.min,
+             "min_year": a.min_year, "reason": "ambiguous", "ok": False, "exit": 2,
+             "ambiguous": [[v, c] for v, c in ambiguous], "notes": [], "warnings": []}
     else:
-        print("\n".join(lines))
-    # cross_dataset is not a dead design; it exits 2 like a bad name, because the
-    # caller asked something that cannot have an answer rather than something
-    # whose answer is no.
-    return 0 if ok else (2 if data.get("reason") == "cross_dataset" else 1)
+        D = analyze(db, a.variables, a.dataset, a.min, a.min_year)
+    D["notes"] = [n.strip() for n in notes] + D["notes"]
+
+    if a.json:
+        # Every branch is a payload with a reason. Two of them used to bypass
+        # this entirely: not_found was hand-built without a reason key, and
+        # ambiguous printed to stderr and emitted no json at all, so a pipeline
+        # doing `--json | jq` got a parse error instead of a verdict.
+        print(json.dumps({k: v for k, v in D.items() if not k.startswith("_")},
+                         indent=2))
+    else:
+        cap = None if a.all else 12
+        D["_denom"] = denominators(db, a.dataset)
+        out = render(D, cap, detail=a.why)
+        stream = sys.stderr if D["reason"] in ("not_found", "ambiguous") else sys.stdout
+        print("\n".join(out), file=stream)
+    return D["exit"]
 
 
 if __name__ == "__main__":

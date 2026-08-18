@@ -2,7 +2,7 @@
 # Regression tests for covary. No framework, run it directly:  ./tests.sh
 #
 # Every case here is a bug that shipped at least once. Exit codes are the
-# contract: 0 usable, 1 not usable, 2 name not found.
+# contract: 0 usable, 1 no stratum has them all, 2 unanswerable as asked.
 
 cd "$(dirname "$0")" || exit 1
 PY=python3
@@ -153,6 +153,60 @@ for f in glob.glob(os.path.join(os.path.dirname("."), "covary_*.db")):
     if n: sys.exit(1)
 PY
 else fail=$((fail+1)); echo "  FAIL duplicate (stratum, variable) keys in the packed index"; fi
+
+# The README transcript drifted from real output twice, in a repo whose whole
+# subject is numbers drifting from their source. Assert it instead of proofreading it.
+if python3 - <<'PY' 2>/dev/null; then pass=$((pass+1)); echo "  ok   README transcript matches real output"
+import subprocess
+r = open("README.md").read()
+k = "$ python3 covary.py PREGNANT PROSTATE --dataset brfss"
+blk = r[r.index(k):]
+blk = blk[:blk.index("```")].split("\n", 1)[1].rstrip()
+real = subprocess.run(["python3", "covary.py", "PREGNANT", "PROSTATE",
+                       "--dataset", "brfss"], capture_output=True, text=True).stdout.rstrip()
+assert blk == real
+PY
+else fail=$((fail+1)); echo "  FAIL README transcript no longer matches real output"; fi
+
+echo "payload, not prose"
+# Four review rounds found the same defect under four names: a fact in the text
+# and not in the structure. These assert the payload, because asserting the
+# string is what let every one of them through.
+j() {  # j <description> <python-assert-body> <args...>
+  desc=$1; body=$2; shift 2
+  if python3 covary.py "$@" --json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+$body" 2>/dev/null; then pass=$((pass+1)); printf '  ok   %s\n' "$desc"
+  else fail=$((fail+1)); printf '  FAIL %s\n' "$desc"; fi
+}
+j "recoverable design says so in the payload" \
+  'assert d["reason"]=="below_threshold" and d["best_below_threshold"]["n"]>0' \
+  RIAGENDR LBXGLU --dataset nhanes --min 999999
+j "impossible design is a different reason" \
+  'assert d["reason"]=="never_together" and d["best_below_threshold"] is None' \
+  PROSTATE SSBSUGR2 --dataset brfss
+j "ambiguous names emit a payload, not silence" 'assert d["reason"]=="ambiguous"' Sex Marital
+j "unknown name payload carries a reason" \
+  'assert d["reason"]=="not_found" and d["suggestions"]' numgivn
+j "cross-dataset is its own reason" 'assert d["reason"]=="cross_dataset"' numgiven BMXBMI
+j "mode note is in the payload" \
+  'assert any(isinstance(n,dict) and n["kind"]=="gss_mode" for n in d["notes"])' \
+  happy socfrend --dataset gss
+j "overlap warning is in the payload" \
+  'assert any(w["kind"]=="same_people_different_ids" for w in d["warnings"])' \
+  RIAGENDR BMXBMI --dataset nhanes
+j "declared exit matches the contract" 'assert d["exit"]==1' numgiven socfrend --dataset gss --min 99999
+
+# render() must not be able to reach the database: if it cannot, it cannot state
+# a fact the payload lacks. This is the structural guarantee, not a spot check.
+if python3 -c "
+import inspect, covary
+src = inspect.getsource(covary.render)
+assert 'db.' not in src and 'db,' not in src, 'render() touches a database handle'
+assert 'db' not in inspect.signature(covary.render).parameters
+" 2>/dev/null; then pass=$((pass+1)); echo "  ok   render() cannot reach the data, only the payload"
+else fail=$((fail+1)); echo "  FAIL render() can reach the data and bypass the payload"; fi
 
 echo "mcp server contract"
 m() {  # m <description> <pattern> <json>

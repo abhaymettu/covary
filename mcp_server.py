@@ -16,7 +16,7 @@ Register it with:
 import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from covary import connect, marginals, report, resolve, suggest, all_names, DBS
+from covary import connect, analyze, render, denominators, resolve, all_names, DBS
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -47,6 +47,8 @@ def validate(a):
     d = a.get("dataset")
     if d is not None and d not in DATASETS:
         return f"dataset must be one of {', '.join(DATASETS)}, got {d!r}"
+    if not isinstance(a.get("detail", False), bool):
+        return "detail must be true or false"
     m = a.get("min_n", 1)
     if not isinstance(m, int) or isinstance(m, bool) or m < 0:
         return "min_n must be a non-negative integer"
@@ -84,6 +86,12 @@ TOOL = {
                 "description": "Restrict to one dataset. A stratum belongs to one "
                                "dataset, so a set spanning datasets never has a joint n.",
             },
+            "detail": {
+                "type": "boolean", "default": False,
+                "description": "Return the full list of strata that dropped out "
+                               "rather than the first few. Use when you need to know "
+                               "exactly which strata lacked which variable.",
+            },
             "min_n": {
                 "type": "integer", "default": 1,
                 "description": "Only report strata with at least this joint n. "
@@ -96,44 +104,30 @@ TOOL = {
 }
 
 
-def run(variables, dataset=None, min_n=1):
+def run(variables, dataset=None, min_n=1, detail=False):
     if not glob.glob(DBS):
         return "No covary index found. Run pack.py to build it.", True
 
     variables = list(dict.fromkeys(variables))   # a repeat used to force a false NONE
     db = connect(dataset)
-    variables, notes, ambiguous = resolve(db, variables)   # case, shared with the CLI
+    variables, notes, ambiguous = resolve(db, variables)
     if ambiguous:
         return "\n".join(
             [f"Ambiguous: {v!r} differs only by case from {', '.join(c)}, which are "
              f"in different datasets." for v, c in ambiguous]
-            + ["Set `dataset`, or spell the name as that dataset spells it."]), True
-    marg = marginals(db, variables, dataset)
-    missing = [v for v in variables if v not in {r[0] for r in marg}]
-    if missing:
-        where = f"in dataset {dataset}" if dataset else "in any indexed dataset"
-        out = [f"Not found {where}: {', '.join(missing)}."]
-        if dataset:
-            out.append("  A variable can be real but belong to another dataset. "
-                       "Retry without `dataset` to check all of them.")
-        names = all_names(db)      # one scan, however many names are unknown
-        for m in missing:
-            sg = suggest(db, m, names=names)
-            if sg:
-                out.append(f"  did you mean: {', '.join(sg)}")
-        return "\n".join(out), True
+            + ["Name a dataset, or spell it as that dataset spells it."]), True
 
-    # One renderer, shared with the CLI. This used to be a second implementation,
-    # and every caveat then had to be remembered in two places. It was not: the
-    # overlap warning and the mode note were wired to the CLI only, so a model
-    # reading this interface added two strata that describe the same people and
-    # reported an inflated N. A caveat a caller can forget is not a caveat.
-    lines, ok, _ = report(db, variables, dataset, min_n, min_year=None, for_agent=True)
-    text = "\n".join(list(notes) + lines)
+    # One computation, two renderings, shared with the CLI. Every caveat lives in
+    # analyze() and render() reads nothing else, so a fact cannot reach one
+    # interface and not another.
+    D = analyze(db, variables, dataset, min_n, min_year=None)
+    D["_denom"] = denominators(db, dataset)
+    text = "\n".join(list(notes) + render(D, cap=None if detail else 12,
+                                          for_agent=True, detail=detail))
     text += ("\n\nPresence means non-missing on the actual variable, so a respondent "
              "who skipped a module or an exam is correctly absent. Read any warning "
              "above before reporting a total to the user.")
-    return text, False
+    return text, D["reason"] in ("not_found",)
 
 
 def handle(req):
@@ -169,7 +163,8 @@ def handle(req):
             return {"jsonrpc": "2.0", "id": rid,
                     "error": {"code": -32602, "message": bad}}
         try:
-            text, is_err = run(a["variables"], a.get("dataset"), a.get("min_n", 1))
+            text, is_err = run(a["variables"], a.get("dataset"),
+                               a.get("min_n", 1), a.get("detail", False))
         except BaseException as e:
             # BaseException, not Exception: covary.connect() calls sys.exit() on a
             # bad dataset, and SystemExit used to kill the server mid-session so the

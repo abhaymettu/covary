@@ -209,7 +209,7 @@ the query path installs nothing. One file per dataset because a single file was
 GSS takes 7.7MB rather than the whole 132MB.
 
 A joint n is `popcount(bitmap_a & bitmap_b)`. A three-variable BRFSS query across
-689 strata and 5.4M respondents answers in 0.036s.
+689 strata and 5.9M respondents answers in 0.036s.
 
 ## Auditing
 

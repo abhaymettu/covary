@@ -71,19 +71,36 @@ each stratum dropped out:
 
 ```
 $ python3 covary.py PREGNANT PROSTATE --dataset brfss
-...
-  1 stratum collected all of these and still has
-  no respondent with all of them.
-  1 of those has a pair of variables with no respondent in common at all.
+per variable, ignoring co-administration:
+  PREGNANT     brfss   n=982726   2011 .. 2023, 689 strata
+  PROSTATE     brfss   n=2480     2011
+
+jointly on the same respondents (min 1):
+  NONE. No respondent is non-missing on all of these in any stratum
+  covered by this index at min 1.
+  Before concluding these were never asked together: this index
+  covers gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an
+  earlier or later administration is invisible here. And a
+  question skipped by a filter is absent for that reason, not
+  because it was left off the instrument. Run with --min 0
+  to see strata where all were collected but no one has them all.
+
+  1 stratum or strata collected all of these and still
+  have no respondent with all of them.
+  1 of those contain a pair with no respondent in common.
   A split ballot and a skip pattern both look exactly like this, so
-  presence cannot tell them apart. The codebook decides which it is.
+  the codebook decides which it is.
 
   best reachable by dropping one variable, at min 1:
     without PROSTATE     brfss 2018|NY n=6685
     without PREGNANT     brfss 2011|HI n=2480
 
-  why the rest dropped out:
+strata that dropped out:
     brfss   2011         52 strata never collected PROSTATE
+    brfss   2012         53 strata never collected PROSTATE
+    brfss   2013         53 strata never collected PROSTATE
+    +10 more groups (CLI: --all)
+    (10 more; --why for all of them)
 ```
 
 "The module never ran here" and "both modules ran and no respondent has both" are

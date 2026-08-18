@@ -49,7 +49,10 @@ python3 /path/to/covary/covary.py --find gun --dataset brfss     # search names
 python3 /path/to/covary/covary.py DR1TKCAL BMXBMI --dataset nhanes --json
 ```
 
-Exit status is 1 when no stratum supports the whole set, so it gates a pipeline.
+Exit status: 0 usable, 1 no stratum has them all, 2 the question cannot be
+answered as asked (unknown or ambiguous name, or a set spanning datasets). With
+`--json` the same verdict is in `reason`, which distinguishes `below_threshold`
+(recoverable by lowering `--min`) from `never_together` (not recoverable).
 
 ## How to read the answer
 
