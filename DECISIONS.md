@@ -89,6 +89,27 @@ split ballot. It is a heuristic, not proof, and the output says so.
   and variable code lookups. A pooled sample has no individual respondent, so it
   cannot answer a co-administration question.
 
+- **GSS `mode` is documented, not indexed.** GSS went multimode in 2021: that
+  year is 293 phone, 218 multimode, 3,521 web and no in-person at all, and 2022
+  and 2024 are mixed. A 2021 n therefore reads as a like-for-like continuation of
+  a phone series when it is not. It stays out of the stratum for the same reason
+  BRFSS `QSTVER` does: presence is per respondent, so a joint n is exact at any
+  grain, and mode is an implementation detail inside a year rather than the thing
+  that decides what was collected there. What mode changes is comparability, and
+  comparability is codebook territory this tool already disclaims.
+
+  One consequence is worth stating because it runs in covary's favour and was not
+  designed in: gssr maps `skipped on web` to NA along with `iap`, so an item a
+  web respondent was never shown is correctly absent for that respondent rather
+  than silently present. The audit now asserts that sentinel specifically, since
+  the whole GSS presence definition rests on it.
+
+- **`ballot` is not in the stratum either**, though split ballots are the
+  mechanism covary exists to catch. It does not need to be: a joint n is a
+  popcount over respondents, so a ballot split shows up as the zero it is without
+  the stratum having to name it. Naming it would triple GSS strata to restate
+  what the number already says.
+
 ## BRFSS
 
 BRFSS is why `stratum` is a string. Its optional modules are chosen state by

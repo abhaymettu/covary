@@ -70,10 +70,14 @@ suppressPackageStartupMessages(library(gssr))
 data(gss_all)
 lab <- attr(gss_all$numgiven, "labels")
 sent <- names(lab)[is.na(lab)]
-if (!all(c("iap", "don't know", "no answer") %in% sent)) {
+# "skipped on web" matters from 2021, when GSS went multimode: an item a web
+# respondent was never shown must read as absent for that respondent, exactly
+# like an iap. If gssr ever stops mapping it to NA, presence would start counting
+# people who were not asked.
+if (!all(c("iap", "don't know", "no answer", "skipped on web") %in% sent)) {
   fail("gssr sentinel handling changed, presence may now count unasked respondents")
 } else {
-  ok("gss: iap/dk/na all map to NA, so presence means asked and answered")
+  ok("gss: iap/dk/na/skipped-on-web all map to NA, so presence means asked and answered")
 }
 
 # NHANES and BRFSS keep refusals as codes (7/9, 77/99) and leave skips blank, so

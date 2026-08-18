@@ -137,6 +137,12 @@ perfectly disjoint respondent sets are a filter signature and a split ballot doe
 not look like that. But the flag is a heuristic, and a zero always deserves the
 codebook before you conclude a design is dead.
 
+**GSS mode, for the same reason.** GSS went multimode in 2021: that year is 293
+phone, 218 multimode, 3,521 web and no in-person interviews at all. `mode` is not
+part of the stratum, so a 2021 n reads as a like-for-like continuation of a phone
+series when it is not. Joint n is still exact, because presence is per respondent.
+Comparability across 2018 and 2021 is not, and covary will not tell you so.
+
 ## What it catches
 
 All figures below are all-year marginals as the tool prints them, not single-year
