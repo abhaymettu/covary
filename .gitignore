@@ -1,0 +1,9 @@
+# derived, 2GB, rebuilt by build_*.R. covary_*.db is the shipped artifact.
+index/
+.cache/
+.venv/
+.remember/
+*.log
+__pycache__/
+*.pyc
+HANDOFF.md
