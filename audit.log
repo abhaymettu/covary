@@ -1,0 +1,95 @@
+Rscript audit.R full
+run 2026-08-18 09:02 UTC on macOS 26.5.2, R version 4.5.1 (2025-06-13)
+
+Warning messages:
+1: package ‘arrow’ was built under R version 4.5.2 
+2: package ‘dplyr’ was built under R version 4.5.2 
+EXHAUSTIVE audit
+
+structural
+  ok: schema 
+  ok: no blank keys 
+
+what presence means
+Warning message:
+package ‘gssr’ was built under R version 4.5.3 
+  ok: gss: iap/dk/na/skipped-on-web all map to NA, so presence means asked and answered 
+
+gss against gssr source, exact match
+  ok: 6918 gss variables match source exactly 
+
+nhanes against cdc source, index must not undercount
+  ... 100 of 1597 tables
+  ... 200 of 1597 tables
+  ... 300 of 1597 tables
+  ... 400 of 1597 tables
+  ... 500 of 1597 tables
+  ... 600 of 1597 tables
+  ... 700 of 1597 tables
+  ... 800 of 1597 tables
+  ... 900 of 1597 tables
+  ... 1000 of 1597 tables
+  ... 1100 of 1597 tables
+  ... 1200 of 1597 tables
+  ... 1300 of 1597 tables
+  ... 1400 of 1597 tables
+  ... 1500 of 1597 tables
+  ok: 1544 nhanes tables, no variable undercounted 
+
+brfss 2011 against cdc source, exact match
+  ok: 452 brfss 2011 variables match source exactly 
+
+brfss 2012 against cdc source, exact match
+  ok: 357 brfss 2012 variables match source exactly 
+
+brfss 2013 against cdc source, exact match
+  ok: 334 brfss 2013 variables match source exactly 
+
+brfss 2014 against cdc source, exact match
+  ok: 277 brfss 2014 variables match source exactly 
+
+brfss 2015 against cdc source, exact match
+  ok: 328 brfss 2015 variables match source exactly 
+
+brfss 2016 against cdc source, exact match
+  ok: 273 brfss 2016 variables match source exactly 
+
+brfss 2017 against cdc source, exact match
+  ok: 356 brfss 2017 variables match source exactly 
+
+brfss 2018 against cdc source, exact match
+  ok: 273 brfss 2018 variables match source exactly 
+
+brfss 2019 against cdc source, exact match
+  ok: 340 brfss 2019 variables match source exactly 
+
+brfss 2020 against cdc source, exact match
+  ok: 277 brfss 2020 variables match source exactly 
+
+brfss 2021 against cdc source, exact match
+  ok: 301 brfss 2021 variables match source exactly 
+
+brfss 2022 against cdc source, exact match
+  ok: 326 brfss 2022 variables match source exactly 
+
+brfss 2023 against cdc source, exact match
+  ok: 348 brfss 2023 variables match source exactly 
+
+packed bitmap db against the parquet index
+  brfss: 157,179 bitmaps self-consistent
+  brfss: 157,179 popcounts match parquet
+  brfss: 40 sampled joint-n queries match parquet
+  gss: 27,728 bitmaps self-consistent
+  gss: 27,728 popcounts match parquet
+  gss: 40 sampled joint-n queries match parquet
+  nhanes: 44,333 bitmaps self-consistent
+  nhanes: 44,333 popcounts match parquet
+  nhanes: 40 sampled joint-n queries match parquet
+  packed db agrees with the parquet index  
+
+all checks passed
+
+sha256 of the db files this run audited:
+  40a6ce343f919750e328e4f7b7248379d587e91f9bba86537360f776b0ba5115  covary_brfss.db
+  245ea53713fdc96ab88c692d42250c8eee25e3d223676791484223862ecfb247  covary_gss.db
+  33f7479f90e73942e4261de928d691b0c55551850393db03d418d148c3a0faa5  covary_nhanes.db
