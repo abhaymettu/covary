@@ -215,6 +215,17 @@ codebook entry came back as NA, understating presence by up to 7.7% on
 questionnaire variables. Every headline number stayed correct, because those
 happened to use continuous variables.
 
+**The evidence ships, so you do not have to take this on faith.** `index/` is
+gitignored, so a fresh clone cannot run `audit.R` or `pack.py --verify` without a
+multi-hour rebuild, which made every claim on this page unverifiable. `audit.log`
+is the full output of `Rscript audit.R full` against the committed db, dated, with
+the sha256 of each db file at the end. Check that what you cloned is what was
+audited:
+
+```bash
+shasum -a 256 covary_*.db && tail -5 audit.log
+```
+
 The audit has since had four bugs of its own, which is more than the index had.
 Each looked exactly like a data bug. That is the argument for exhaustive mode and
 for `fips.R`, which exists so the builder and the audit cannot disagree about the
