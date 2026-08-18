@@ -4,6 +4,8 @@ index/
 .venv/
 .remember/
 *.log
+# except the shipped audit evidence, see README
+!audit.log
 __pycache__/
 *.pyc
 HANDOFF.md

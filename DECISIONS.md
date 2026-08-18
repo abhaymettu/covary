@@ -171,7 +171,7 @@ to a builder.
 Sampling finds systematic breakage and misses local breakage. The first version
 of `pack.py --verify` sampled 40 variable pairs out of 6,918 GSS variables, which
 is 0.02% of them, and missed a single flipped bit. Two of its three checks are
-now exhaustive across all 222,373 bitmaps.
+now exhaustive across all 229,240 bitmaps.
 
 ## Bugs found by auditing, all silent
 

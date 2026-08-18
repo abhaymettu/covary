@@ -45,7 +45,7 @@ python3 covary.py numgiven socfrend
 ```
 
 That is the whole install. The query path is Python standard library only, no
-virtualenv and no dependencies. The 129MB index is in the repo.
+virtualenv and no dependencies. The 132MB index is in the repo.
 
 ## Use
 
@@ -114,7 +114,7 @@ claude mcp add covary -- python3 "$PWD/mcp_server.py"
 | dataset | strata | variables | presence bits | stratum |
 |---|---|---|---|---|
 | GSS | 35 | 6,918 | 35.3M | year |
-| NHANES | 14 | 11,213 | 122.6M | cycle, 1999-2000 to 2021-2023 |
+| NHANES | 14 | 12,388 | 160.1M | cycle, 1999-2000 to 2021-2023 |
 | BRFSS | 689 | 1,037 | 1.01B | year\|state, 2011-2023 |
 
 `stratum` is the unit within which co-administration is decided. It is the year
@@ -206,10 +206,10 @@ Rscript audit.R 6 40 2023    # also verify BRFSS 2023 against CDC
 
 The audit re-reads the original sources rather than checking the index against
 itself, because a wrong index is still perfectly self-consistent. `full` mode
-re-downloads everything and checks every variable: 6,918 GSS variables, 1,443
-NHANES tables, 4,242 BRFSS variables across 13 years, and all 222,373 bitmaps.
+re-downloads everything and checks every variable: 6,918 GSS variables, 1,597
+NHANES tables, 4,242 BRFSS variables across 13 years, and all 229,240 bitmaps.
 
-Two silent bugs were found this way and are written up in `DECISIONS.md`. The one
+Three silent bugs were found this way and are written up in `DECISIONS.md`. The one
 worth naming: a reader applied value-label translation, so any code without a
 codebook entry came back as NA, understating presence by up to 7.7% on
 questionnaire variables. Every headline number stayed correct, because those
