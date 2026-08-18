@@ -107,6 +107,30 @@ readable source of truth that `audit.R` checks against CDC and gssr, and it is
 gitignored and deletable. `covary_*.db` is derived from it: one bitmap per
 (stratum, variable), where a joint n is a popcount of an AND.
 
+## Data and attribution
+
+The index is derived from three public-use survey series and ships in this repo.
+
+| source | provider | via |
+|---|---|---|
+| General Social Survey | NORC at the University of Chicago | the `gssr` R package |
+| NHANES | CDC / National Center for Health Statistics | public XPT files from wwwn.cdc.gov |
+| BRFSS | CDC | public XPT files from cdc.gov/brfss |
+
+**What is in the index, and what is not.** It records only whether a respondent
+was non-missing on a variable. One bit. It contains no responses, no values, and
+no demographics. That missingness pattern is computable by anyone from the same
+public files, so nothing here is derivable from the index that is not already
+derivable from the source.
+
+NHANES and BRFSS are works of the United States government. The GSS is
+distributed for public research use by NORC and asks to be cited. If you use this
+index in published work, cite the underlying surveys, not this repository.
+
+Nothing here is a substitute for the codebooks. covary answers whether variables
+were measured together. It says nothing about what they mean, how they were
+weighted, or whether they are comparable across years.
+
 ## Auditing
 
 ```bash
