@@ -48,6 +48,7 @@ g "no-overlap pair is reported"           "no respondent in common" PREGNANT PRO
 g "high --min points at the real answer"  "below your threshold" numgiven socfrend --dataset gss --min 99999
 g "case correction is announced"          "reading NUMGIVEN as numgiven" NUMGIVEN socfrend --dataset gss
 g "suggests near names"                   "socfrend" socfriend --dataset gss
+g "finds a transposition, not just a prefix" "DR1TKCAL" DR1TKCLA --dataset nhanes
 g "brfss rolls up rather than listing all" "of 52 states" GUNLOAD ACEDEPRS --dataset brfss
 
 echo "tier 3 features"

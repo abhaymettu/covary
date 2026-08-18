@@ -1,6 +1,11 @@
 # derived, 2GB, rebuilt by build_*.R. covary_*.db is the shipped artifact.
 index/
 .cache/
+# but ship the manifest: audit.R full needs it, and without it a clone cannot
+# reproduce the verification even after rebuilding index/
+!.cache/
+.cache/*
+!.cache/nhanes_manifest.parquet
 .venv/
 .remember/
 *.log

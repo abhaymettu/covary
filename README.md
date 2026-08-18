@@ -232,8 +232,10 @@ questionnaire variables. Every headline number stayed correct, because those
 happened to use continuous variables.
 
 **The evidence ships, so you do not have to take this on faith.** `index/` is
-gitignored, so a fresh clone cannot run `audit.R` or `pack.py --verify` without a
-multi-hour rebuild, which made every claim on this page unverifiable. `audit.log` is written by `Rscript audit.R full` itself: the full run output,
+gitignored because it is 2GB, so a fresh clone needs a rebuild before it can run
+`audit.R` or `pack.py --verify`. The NHANES manifest that a rebuild needs is
+committed, so the rebuild is a matter of time rather than of guessing what to
+fetch. `audit.log` is written by `Rscript audit.R full` itself: the full run output,
 dated, with the sha256 of each db file it verified at the top. It used to be
 assembled by hand, which meant this page described an artifact no code produced
 and the link between the log and the shipped files rested on whoever pasted the

@@ -120,7 +120,7 @@ def run(variables, dataset=None, min_n=1):
         for m in missing:
             sg = suggest(db, m, names=names)
             if sg:
-                out.append(f"  names starting like {m!r}: {', '.join(sg)}")
+                out.append(f"  did you mean: {', '.join(sg)}")
         return "\n".join(out), True
 
     lines = list(notes) + ["Per variable, ignoring co-administration:"]

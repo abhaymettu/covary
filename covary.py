@@ -26,7 +26,7 @@ Reads covary.db, which holds one bitmap per (stratum, variable). A joint n is a
 popcount of an AND, so this needs nothing installed. Rebuild the db from the
 parquet index with pack.py.
 """
-import argparse, glob, json, os, sqlite3, sys, zlib
+import argparse, difflib, glob, json, os, sqlite3, sys, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DBS = os.path.join(HERE, "covary_*.db")
@@ -64,6 +64,27 @@ UNIT = {"brfss": "states"}
 # possible here, unlike the pooled spans whose SEQNs are shared; a warning is the
 # honest limit.
 PHYSICAL_OVERLAP = {("nhanes", "2017-2020"): ("2017-2018",)}
+
+
+def mode_note(db, rows):
+    """GSS records how each respondent was interviewed, from 2004 on.
+
+    A joint n says nothing about whether the administration mode was comparable
+    across the years it spans. GSS 2021 leaned heavily on web after the pandemic
+    interrupted in-person fieldwork, and a 2021 n sitting beside a 1985 n in the
+    same column invites a comparison the tool cannot support.
+
+    This points at the variable rather than claiming which years are which. The
+    values are in the data; asserting a characterisation from memory is how the
+    disjointness heuristic ended up backwards.
+    """
+    yrs = sorted({st for ds, st, *_ in rows if ds == "gss"})
+    if len(yrs) < 2:
+        return None
+    have = {r[0] for r in db.execute(
+        "select distinct stratum from bm where dataset='gss' and variable='mode'")}
+    hit = [y for y in yrs if y in have]
+    return hit if hit else None
 
 
 def overlap_warning(rows):
@@ -127,14 +148,28 @@ def all_names(db):
 
 
 def suggest(db, name, k=6, names=None):
-    """A half-remembered name should not be a dead end. Shared with mcp_server."""
+    """A half-remembered name should not be a dead end.
+
+    Prefix matching alone cannot find a transposition, which is the typo people
+    actually make: DR1TKCLA is one swap from DR1TKCAL and shares its first four
+    characters with seventy other names, so a prefix scan returned six of them
+    alphabetically and never the right one. Combine both: near-spellings first,
+    then prefix matches to fill, since a wrong first syllable is the other common
+    case and edit distance is bad at it.
+    """
+    rows = names if names is not None else all_names(db)
+    vars_ = [v for _, v in rows]                 # all_names gives (dataset, variable)
+    up = {}
+    for v in vars_:
+        up.setdefault(v.upper(), v)
+    close = difflib.get_close_matches(name.upper(), list(up), n=k, cutoff=0.7)
+    out = [up[c] for c in close]
     pre = name[:4].lower()
-    seen, out = set(), []
-    for _, v in (names if names is not None else all_names(db)):
-        if v.lower().startswith(pre) and v not in seen:
-            seen.add(v); out.append(v)
-            if len(out) == k:
-                break
+    for v in vars_:
+        if len(out) >= k:
+            break
+        if v.lower().startswith(pre) and v not in out:
+            out.append(v)
     return out
 
 
@@ -414,15 +449,24 @@ def main():
                   "--dataset", file=sys.stderr)
         for m in missing:
             if near[m]:
-                print(f"  names starting like {m!r}: {', '.join(near[m])}", file=sys.stderr)
+                print(f"  did you mean: {', '.join(near[m])}", file=sys.stderr)
             else:
-                print(f"  nothing starts like {m!r}; try --find", file=sys.stderr)
+                print(f"  no near match for {m!r}; try --find PATTERN", file=sys.stderr)
         return 2   # a bad name is not a dead design; keep the exit codes distinct
 
     say("per variable, ignoring co-administration:")
     for v, ds, n, lo, hi, ns in marg:
-        span = lo if lo == hi else f"{lo} .. {hi}"
-        say(f"  {v:<12} {ds:<7} n={n:<8} {span}, {ns} strat{'um' if ns == 1 else 'a'}")
+        # List them when there are few. "1985 .. 2024, 4 strata" reads as
+        # continuous coverage and those four years are 1985, 1987, 2004 and 2024.
+        if ns <= 6 and not a.dataset == "brfss":
+            got = [r[0] for r in db.execute(
+                "select distinct substr(stratum,1,instr(stratum||'|','|')-1) from bm"
+                " where variable = ? and dataset = ? order by 1", (v, ds))]
+            span = ", ".join(got)
+        else:
+            span = lo if lo == hi else f"{lo} .. {hi}"
+        say(f"  {v:<12} {ds:<7} n={n:<8} {span}"
+            f"{'' if ns <= 6 else f', {ns} strata'}")
 
     datasets = {r[1] for r in marg}
     if len(datasets) > 1 and not a.dataset:
@@ -469,6 +513,11 @@ def main():
         if why and (why[0] or why[1]):
             print("\nstrata that dropped out:")
             print("\n".join(show_absences(why, cap)))
+        mn = mode_note(db, usable)
+        if mn:
+            print(f"\n  note: gss records an interview `mode` variable in {', '.join(mn)}.")
+            print("  A joint n does not tell you the mode was comparable across the years")
+            print("  above. Check `mode` before pooling or trending across them.")
         for ds, st, clash in overlap_warning(usable):
             print(f"\n  warning: {ds} {st} and {', '.join(clash)} describe some of the")
             print("  same people under different respondent ids. Do not pool them or add")
