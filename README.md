@@ -11,11 +11,23 @@ succeeds, and the research design is dead.
 $ python3 covary.py numgiven socfrend
 per variable, ignoring co-administration:
   numgiven     gss     n=5819     1985, 1987, 2004, 2024
+               number of persons mentioned
   socfrend     gss     n=45294    1974 .. 2024, 29 strata
+               spend evening with friends
 
 jointly on the same respondents (min 1):
   gss     1985         n=1526
   gss     2024         n=711
+
+strata that dropped out:
+    gss     1974         1 stratum never collected numgiven
+    gss     1975         1 stratum never collected numgiven
+    gss     1977         1 stratum never collected numgiven
+    gss     5 more collected none of them, so they are not about this question
+    (24 more; --why for all of them)
+
+  note: gss records an interview `mode` variable in 2024. A joint n does not tell you the mode
+  was comparable across those years.
 ```
 
 `numgiven` and `socfrend` have zero overlap in GSS 2004. They co-occur in 1985
@@ -64,6 +76,7 @@ python3 covary.py --find gun --dataset brfss          # half-remembered a name
 | `--all` | do not truncate the per-group list of strata |
 | `--json` | machine-readable, so the tool composes in a pipeline |
 | `--find PAT` | list indexed names containing PAT, then exit |
+| `--search TEXT` | rank indexed variables by what they ask. `--find` is for a half-remembered name, `--search` is for when you do not know the name at all |
 
 **A zero answers the wrong question, so covary answers the next one too.** When
 nothing is usable it reports what dropping one variable would buy you, and why
@@ -73,7 +86,9 @@ each stratum dropped out:
 $ python3 covary.py PREGNANT PROSTATE --dataset brfss
 per variable, ignoring co-administration:
   PREGNANT     brfss   n=982726   2011 .. 2023, 689 strata
+               PREGNANCY STATUS
   PROSTATE     brfss   n=2480     2011
+               EVER TOLD YOU HAD PROSTATE CANCER
 
 jointly on the same respondents (min 1):
   NONE. No respondent is non-missing on all of these in any stratum
@@ -123,6 +138,11 @@ this failure constantly:
 ```bash
 claude mcp add covary -- python3 "$PWD/mcp_server.py"
 ```
+
+Two tools: `search_variables` goes from a plain-English topic to real variable
+names, and `check_covariation` answers whether those names were administered
+together. An agent reasoning from a research question rather than from a list of
+names uses them in that order, and never has to guess a name.
 
 `skills/covary/SKILL.md` tells an agent to check before designing an analysis.
 
@@ -184,9 +204,54 @@ figures. Run the command yourself; the numbers should reproduce exactly.
 | NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | 2,842 to 4,659 per stratum | fasting subsample |
 | BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 in 2023, plus 920 in 1 of 54 in 2022 | state optional modules |
 
-A caution the tool cannot give you: `FIREARM5` is whether a firearm is kept in the
-home, `GUNLOAD` and `LOADULK2` are the storage items. covary will happily confirm
-that two variables were measured together while you are asking about the wrong two.
+A caution the tool used to be unable to give you: `FIREARM5` is whether a firearm
+is kept in the home, `GUNLOAD` and `LOADULK2` are the storage items. covary would
+happily confirm that two variables were measured together while you were asking
+about the wrong two. That is what the text layer below is for.
+
+## Finding the name in the first place
+
+To ask whether two variables were co-administered you have to know the survey
+calls the thing you mean `numgiven`. Everyone new to a survey hits that wall
+before they hit the co-administration wall, and so does every agent.
+
+```
+$ python3 covary.py --search "firearm storage in the home" --dataset brfss
+  brfss   FIREARM4       ANY FIREARMS IN HOME
+  brfss   FIREARM5       ANY FIREARMS IN HOME
+  brfss   GUNLOAD        ANY FIREARMS LOADED
+  brfss   LOADULK2       ANY LOADED FIREARMS ALSO UNLOCKED
+```
+
+Three different questions, now distinguishable. The one-line description also
+prints under every variable in normal output, and `--why` adds the verbatim item
+wording where the agency published it.
+
+**The text is the agencies' own, and its quality is theirs too.** GSS ships the
+full interviewer script and NORC's subject tags via `gssrdoc`, so GSS search
+works well. NHANES publishes a description per variable, and BRFSS publishes
+only a terse upper-case SAS label, so BRFSS search is adequate rather than good.
+No amount of code fixes that.
+
+| dataset | labelled | source |
+|---|---|---|
+| GSS | 6,918 / 6,918 | `gssrdoc::gss_doc`, verbatim wording plus subject tags |
+| NHANES | 11,935 / 12,388 | CDC per-component variable list |
+| BRFSS | 1,037 / 1,037 | SAS label in the XPT header |
+
+**Ranking is a text match and says nothing about co-administration.** Search
+tells you which variables are about a topic. Whether they were put to the same
+respondents is the other question, and it is the one the index answers.
+
+The text lives in `labels.db`, which is derived, regenerable, and deliberately
+not named `covary_*.db`: that glob is what `covary.py` unions into its views and
+what `audit.log` records hashes for. A clone without it behaves exactly as covary
+did before this existed, because the index is the product and the text is an
+enhancement.
+
+```bash
+Rscript build_labels.R && python3 pack_labels.py
+```
 
 ## Rebuilding
 

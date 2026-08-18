@@ -318,8 +318,23 @@ per-stratum number, a pooled estimate needs the group total.
 
 - **ATUS.** bls.gov returns 403 behind Akamai even with a browser user agent.
   Cut rather than worked around.
-- **A question-level semantic layer**, matching variables by what they ask rather
-  than by name. It sits on top of this index, and building it first is the wrong
-  order.
+- ~~**A question-level semantic layer**, matching variables by what they ask
+  rather than by name.~~ **Built 2026-08-18, in a much smaller form than the one
+  parked.** The parked version assumed covary would have to do the semantics, and
+  deferred it as the unsolved research problem in this space. It is not covary's
+  problem. The consumer of this output is an agent, or a researcher with an LLM
+  open in the next tab, and either performs the question-to-variable step itself
+  given searchable text. What was missing was an asset, not a model: the index
+  stored names and bits and no text at all. So the layer is a `labels` table
+  from each agency's own published wording, plus FTS5. See
+  `docs/superpowers/specs/2026-08-18-covary-labels-design.md`.
+
+  What stays out of scope for the same reason it always was: covary does not
+  answer research questions. It surfaces which variables are about a topic and
+  which strata measured them together. The inferential step stays with the
+  researcher.
+
+  Labels are never evidence about co-administration. Presence bits remain the
+  only source of truth for a joint n.
 - **Harmonization.** CLOSER and Maelstrom own that and are well funded. The
   contribution here is co-administration.

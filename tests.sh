@@ -289,6 +289,66 @@ if printf '%s\n%s\n' \
   pass=$((pass+1)); echo "  ok   server survives a bad call and answers the next"
 else fail=$((fail+1)); echo "  FAIL server died on a bad call"; fi
 
+
+echo "text layer"
+# The index is the product and the text is an enhancement, so every case above
+# must still pass with labels.db missing. Checked by moving it, not by trusting
+# the try/except: an exception swallowed in labels_db() would look identical.
+if [ -f labels.db ]; then
+  mv labels.db labels.db.hidden
+  if $PY covary.py numgiven socfrend --dataset gss 2>&1 | grep -q "n=1526"; then
+    pass=$((pass+1)); echo "  ok   index answers unchanged with no labels.db"
+  else fail=$((fail+1)); echo "  FAIL a missing labels.db broke the index"; fi
+  $PY covary.py --search anything --dataset gss > /dev/null 2>&1
+  if [ $? = 2 ]; then pass=$((pass+1)); echo "  ok   --search without labels.db exits 2"
+  else fail=$((fail+1)); echo "  FAIL --search without labels.db did not exit 2"; fi
+  mv labels.db.hidden labels.db
+else
+  echo "  skip labels.db absent, build it: Rscript build_labels.R && $PY pack_labels.py"
+fi
+
+if [ -f labels.db ]; then
+  t 0 "--search finds a name from a phrase"   --search "spend evening with friends" --dataset gss
+  t 2 "--search with no hit exits 2"          --search "zzzqqqxxnotaword" --dataset gss
+  g "label prints under the variable"  "number of persons mentioned"  numgiven --dataset gss
+  # The wrong-two-variables failure the README confesses. These three are
+  # different questions and the index alone cannot tell them apart.
+  g "firearm storage is distinguishable"  "LOADULK2"  --search "firearm stored loaded" --dataset brfss
+  g "search is restricted to indexed names"  "socfrend"  --search "spend evening with friends" --dataset gss
+  # An operator character used to make FTS5 raise rather than return nothing.
+  t 0 "punctuation in a query is not a crash"  --search "cost of care - out of pocket??" --dataset gss
+  g "json carries the label"  '"description"'  numgiven --dataset gss --json
+
+  # Coverage floor. A partially fetched source builds a labels.db that answers
+  # some searches and silently misses whole regions of a survey, which no
+  # single-query test can see.
+  if $PY - <<'EOF'
+import sqlite3, glob, os, sys
+L = sqlite3.connect("file:labels.db?mode=ro", uri=True)
+floors = {"gss": 90, "nhanes": 90, "brfss": 60}
+bad = []
+for f in sorted(glob.glob("covary_*.db")):
+    ds = os.path.basename(f)[7:-3]
+    idx = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+    names = {v for (v,) in idx.execute("select distinct variable from bm")}
+    have = {v for (v,) in L.execute("select variable from labels where dataset=?", (ds,))}
+    pct = 100.0 * len(names & have) / len(names)
+    if pct < floors.get(ds, 0):
+        bad.append(f"{ds} {pct:.1f}% < {floors[ds]}%")
+print("; ".join(bad), file=sys.stderr)
+sys.exit(1 if bad else 0)
+EOF
+  then pass=$((pass+1)); echo "  ok   label coverage is above the floor for every dataset"
+  else fail=$((fail+1)); echo "  FAIL label coverage fell below the floor"; fi
+
+  m "search_variables answers a plain-English query" 'GUNLOAD' \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_variables","arguments":{"query":"firearm storage in the home","dataset":"brfss"}}}'
+  m "search_variables rejects an empty query" 'query is required' \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_variables","arguments":{"query":"  "}}}'
+  m "a no-hit search must not read as absence" 'NOT report' \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_variables","arguments":{"query":"zzzqqqxxnotaword"}}}'
+fi
+
 rm -f /tmp/covary_t.out
 echo
 echo "$pass passed, $fail failed"

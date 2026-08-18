@@ -29,6 +29,13 @@ SUMMARISED = {
     # justification for an exemption they were not performing. Now the
     # containers are traversed and only the named leaves above are exempt.
     "collected_but_no_overlap": "printed as counts, and omitted when zero",
+    # Not a blanket exemption. The default view carries the one-line description
+    # instead, and question_shown() below asserts the full wording does reach the
+    # reader under --why, on the same principle as denominators: an allowlist
+    # that grows to cover a failure is the same as no check.
+    "question":      "verbatim item wording, summarised to `description` in the"
+                     " default view and printed in full under --why, which"
+                     " question_shown() verifies",
 }
 
 # Rendered as wording rather than as a value, each with a reason. This list was
@@ -123,8 +130,43 @@ def coverage_shown(D, text):
             if c["first"] not in text or c["last"] not in text]
 
 
+def question_shown():
+    """The verbatim wording must be reachable, not merely present in --json.
+
+    `question` is exempt from the sweep because it is summarised by default. That
+    exemption is only honest if some invocation prints it, so this runs the one
+    that must. Written as a check rather than as another allowlist line, because
+    the last thing exempted with a good reason and no check was the denominator.
+    """
+    q = ["numgiven", "socfrend", "--dataset", "gss", "--why"]
+    r = subprocess.run(["python3", "covary.py"] + q, capture_output=True, text=True)
+    text = r.stdout + r.stderr
+    js = subprocess.run(["python3", "covary.py"] + q + ["--json"],
+                        capture_output=True, text=True).stdout
+    try:
+        D = json.loads(js)
+    except json.JSONDecodeError:
+        return ["--why emitted no parseable payload"]
+    out = []
+    for m in D.get("marginals", []):
+        if not m.get("question"):
+            continue
+        # Compared on words, not on the string: the text is wrapped and indented,
+        # so an exact substring test would pass only by accident of line width.
+        words = [w for w in m["question"].split() if len(w) > 4][:12]
+        missing = [w for w in words if w not in text]
+        if missing:
+            out.append(f"{m['variable']}: --why omits {missing[:4]}")
+    if not any(m.get("question") for m in D.get("marginals", [])):
+        out.append("no marginal carried question text; is labels.db built?")
+    return out
+
+
 def main():
     bad = 0
+    for msg in question_shown():
+        print(f"  FAIL {msg}")
+        bad += 1
     for q in QUERIES:
         text = subprocess.run(["python3", "covary.py"] + q,
                               capture_output=True, text=True)

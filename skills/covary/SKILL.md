@@ -1,6 +1,6 @@
 ---
 name: covary
-description: Use BEFORE designing, coding, or estimating any analysis on GSS, NHANES, or BRFSS, and before claiming a research design is feasible or dead. Checks whether the variables a design needs were administered to the same respondents. Also use when a sample size looks surprisingly small, when a merge or join across survey files yields fewer rows than expected, or when deciding which survey year, cycle, or state to analyse.
+description: Use BEFORE designing, coding, or estimating any analysis on GSS, NHANES, or BRFSS, and before claiming a research design is feasible or dead. Checks whether the variables a design needs were administered to the same respondents, and finds the variable names in the first place from a plain-English topic. Also use when a sample size looks surprisingly small, when a merge or join across survey files yields fewer rows than expected, or when deciding which survey year, cycle, or state to analyse.
 ---
 
 # covary
@@ -34,6 +34,32 @@ Run it **before** writing analysis code, not after a sample size looks wrong.
 - Choosing which year, cycle, or state to use
 - A joint sample size came out smaller than expected
 
+## If you do not know the variable names
+
+Do not guess them. A guessed name that does not exist wastes a call, and a
+guessed name that does exist may ask something other than what you meant. BRFSS
+`FIREARM5` is whether a firearm is kept in the home and `GUNLOAD` is how it is
+stored; nothing but the description tells them apart.
+
+Search first, then check. Over MCP that is `search_variables`, then
+`check_covariation`. On the CLI:
+
+```bash
+python3 /path/to/covary/covary.py --search "firearm storage in the home" --dataset brfss
+python3 /path/to/covary/covary.py --search "how often do you see friends" --dataset gss
+```
+
+Search only returns names that exist in the index, so every result can be passed
+straight to the co-administration check. **Read the description before using a
+name.**
+
+Two things it does not mean. Ranking is a text match and says nothing about
+whether those variables were administered together, which is the other question
+and the one the index answers. And an empty search result is almost always
+vocabulary rather than absence: the text is whatever each agency published, rich
+for GSS and terse for BRFSS. Try plainer words. Do not report to the user that a
+survey does not measure something on the strength of a search returning nothing.
+
 ## How to run it
 
 If the `covary` MCP server is available, call `check_covariation` with the
@@ -45,7 +71,8 @@ Otherwise use the CLI, which needs no dependencies:
 python3 /path/to/covary/covary.py numgiven socfrend
 python3 /path/to/covary/covary.py RIAGENDR BMXBMI LBXGLU --dataset nhanes
 python3 /path/to/covary/covary.py GUNLOAD ACEDEPRS --dataset brfss --min 500
-python3 /path/to/covary/covary.py --find gun --dataset brfss     # search names
+python3 /path/to/covary/covary.py --find gun --dataset brfss     # half-remembered name
+python3 /path/to/covary/covary.py --search "firearm storage" --dataset brfss   # no idea of the name
 python3 /path/to/covary/covary.py DR1TKCAL BMXBMI --dataset nhanes --json
 ```
 
@@ -93,3 +120,5 @@ the analysis would have kept.
   what caused this tool to be written.
 - Do not treat covary as a substitute for weights, censoring, or sentinel-code
   handling. It answers one question: were these measured together.
+- Do not treat a search ranking as evidence about anything but wording. It does
+  not know what a variable means, only what the agency wrote about it.

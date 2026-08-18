@@ -28,7 +28,7 @@ Reads covary.db, which holds one bitmap per (stratum, variable). A joint n is a
 popcount of an AND, so this needs nothing installed. Rebuild the db from the
 parquet index with pack.py.
 """
-import argparse, difflib, glob, json, os, sqlite3, sys, zlib
+import argparse, difflib, glob, json, os, sqlite3, sys, textwrap, zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DBS = os.path.join(HERE, "covary_*.db")
@@ -60,6 +60,90 @@ def connect(dataset=None):
     return db
 
 # What the second part of a compound stratum actually is, per dataset.
+LABELS = os.path.join(HERE, "labels.db")
+_LDB = False   # False means "not tried yet"; None means "tried, not there"
+
+
+def labels_db():
+    """The text layer, or None. Absence is not an error.
+
+    The index is the product and the text is an enhancement, so a clone that has
+    not run pack_labels.py must behave exactly as it did before this existed.
+    Every caller of this function has to cope with None rather than assume a
+    handle, which is why it is not opened in connect().
+    """
+    global _LDB
+    if _LDB is False:
+        try:
+            _LDB = sqlite3.connect(f"file:{LABELS}?mode=ro", uri=True)
+            _LDB.execute("select 1 from labels limit 1")
+        except sqlite3.Error:
+            _LDB = None
+    return _LDB
+
+
+def label_of(dataset, variable):
+    """(description, question) for one variable, or None if there is no text.
+
+    Keyed on (dataset, variable) because a name is only unique within a dataset:
+    the index has names that differ between surveys only by case, which resolve()
+    already treats as ambiguous.
+    """
+    ldb = labels_db()
+    if ldb is None:
+        return None
+    r = ldb.execute("select description, question from labels"
+                    " where dataset = ? and variable = ?",
+                    (dataset, variable)).fetchone()
+    if not r or not (r[0] or r[1]):
+        return None
+    return r[0] or "", r[1] or ""
+
+
+def fts_query(text):
+    """User text -> an FTS5 MATCH expression that cannot be a syntax error.
+
+    FTS5 treats -, ", *, NEAR and OR as operators, so passing a plain phrase
+    through raw turns a question like "cost of care - out of pocket" into a
+    parse failure. Quote every token, so none of them can be one.
+
+    Joined with OR, not FTS5's default implicit AND. A person searching this
+    types the concept, not the survey's wording, and any one wrong word in a
+    four-word phrase makes an AND return nothing. Measured: "discuss important
+    matters friends" under AND excluded numgiven, the exact variable that asks
+    it, because that item never says "friends". bm25 then ranks by how many
+    terms matched and how rare they are, which is the job AND was doing badly.
+    """
+    toks = [t for t in "".join(c if c.isalnum() else " " for c in text).split() if t]
+    return " OR ".join('"%s"' % t for t in toks)
+
+
+def search(db, text, limit=25):
+    """Rank indexed variables by how well their text matches a phrase.
+
+    Restricted to names that are actually in the presence index. labels.db
+    covers more variables than the index does (NHANES publishes text for 15,877
+    and the index holds 12,388), and returning a name covary would then report
+    as not_found is worse than returning nothing.
+
+    Weights put the variable name and the one-line description above the item
+    wording, which is long and would otherwise let an incidental word in a
+    paragraph outrank an exact description.
+    """
+    ldb = labels_db()
+    q = fts_query(text)
+    if ldb is None or not q:
+        return []
+    indexed = set(all_names(db))            # (dataset, variable)
+    rows = ldb.execute(
+        "select l.dataset, l.variable, l.description, l.question"
+        "  from labels_fts f join labels l on l.rowid = f.rowid"
+        " where labels_fts match ?"
+        " order by bm25(labels_fts, 10.0, 5.0, 1.0)"
+        " limit ?", (q, limit * 20)).fetchall()
+    return [r for r in rows if (r[0], r[1]) in indexed][:limit]
+
+
 UNIT = {"brfss": "states"}
 
 # Strata that contain the same physical people under identifiers that cannot be
@@ -431,6 +515,8 @@ REASONS = {
     "ambiguous":       {"exit": 2, "is_error": True},
     "find":            {"exit": 0, "is_error": False},
     "find_empty":      {"exit": 2, "is_error": True},
+    "search":          {"exit": 0, "is_error": False},
+    "search_empty":    {"exit": 2, "is_error": True},
 }
 
 
@@ -546,10 +632,17 @@ def analyze(db, vars_, dataset, min_n, min_year):
                   and any(r[0] == d2 and r[1] == st for r in result_rows)
                   and any(r[0] == d2 and r[1] in others for r in result_rows)
                   for (d2, st), others in PHYSICAL_OVERLAP.items())
+        lab = label_of(ds, v)
         D["marginals"].append(
             {"variable": v, "dataset": ds, "n": n, "first": lo, "last": hi,
              "strata": ns, "strata_list": strata if ns <= 8 else None,
-             "double_counts_people": dbl})
+             "double_counts_people": dbl,
+             # Attached here, not in render(), because render() reads the payload
+             # and nothing else. A null means no text, which is the honest state
+             # for a clone with no labels.db and for the NHANES variables CDC
+             # never published a description for.
+             "description": lab[0] if lab else None,
+             "question": lab[1] if lab and lab[1] else None})
 
     if len(datasets) > 1 and not dataset:
         D.update(cross_dataset=sorted(datasets), reason="cross_dataset", ok=False)
@@ -660,6 +753,22 @@ def render(D, cap=12, for_agent=False, detail=False):
                 else f"{m['first']} .. {m['last']}, {m['strata']} strata")
         dbl = "  <- counts some people twice, see warning below" if m["double_counts_people"] else ""
         L.append(f"  {m['variable']:<12} {m['dataset']:<7} n={m['n']:<8} {span}{dbl}")
+        # What the variable actually asks. FIREARM5 is whether a firearm is kept
+        # in the home and GUNLOAD is how it is stored; without this line the
+        # output confirms co-administration of whichever two you happened to
+        # name. Truncated because a description is one line by intent but not by
+        # guarantee, and the full wording is in --json.
+        if m.get("description"):
+            d = m["description"]
+            L.append(f"               {d if len(d) <= 66 else d[:65] + chr(0x2026)}")
+        # The verbatim item, on request. A description is a curator's gloss and
+        # the wording is the thing respondents actually answered: GSS `numgiven`
+        # reads "number of persons mentioned", which does not tell you the item
+        # asks who you discussed important matters with over six months. Behind
+        # a flag because it runs to a paragraph.
+        if detail and m.get("question"):
+            for ln in textwrap.wrap(m["question"], 62):
+                L.append(f"               | {ln}")
 
     if D["reason"] == "cross_dataset":
         L.append("")
@@ -779,6 +888,10 @@ def main():
     p.add_argument("--dataset", help="restrict to one dataset: gss, nhanes, brfss")
     p.add_argument("--find", metavar="PATTERN",
                    help="list indexed variable names containing PATTERN, then exit")
+    p.add_argument("--search", metavar="TEXT",
+                   help="rank indexed variables by what they ask, then exit. "
+                        "--find is for a half-remembered name; --search is for "
+                        "when you do not know the name at all")
     p.add_argument("--all", action="store_true",
                    help="do not truncate the per-group list of strata")
     p.add_argument("--why", action="store_true",
@@ -790,12 +903,41 @@ def main():
         p.error("--min cannot be negative; 0 shows zero-overlap strata")
     if a.min_year is not None and a.min_year < 0:
         p.error("--min-year cannot be negative")
-    if not a.variables and not a.find:
-        p.error("give at least one variable, or --find PATTERN")
+    if not a.variables and not a.find and not a.search:
+        p.error("give at least one variable, or --find PATTERN, or --search TEXT")
     cap = None if a.all else 12
     say = (lambda *x: None) if a.json else print
 
     db = connect(a.dataset)
+
+    if a.search:
+        # Exits before --find so the two never both run. They answer different
+        # questions and reporting both would read as one ranked list.
+        if labels_db() is None:
+            print(f"no text index at {LABELS}\n"
+                  "build it: Rscript build_labels.R && python3 pack_labels.py",
+                  file=sys.stderr)
+            return REASONS["search_empty"]["exit"]
+        hits = search(db, a.search)
+        key = "search" if hits else "search_empty"
+        if a.json:
+            print(json.dumps(stamp({
+                "search": a.search, "reason": key, "ok": bool(hits),
+                "matches": [{"dataset": d, "variable": v, "description": desc,
+                             "question": q or None}
+                            for d, v, desc, q in hits]}), indent=2))
+        else:
+            for d, v, desc, _ in hits:
+                print(f"  {d:<7} {v:<14} {desc}")
+            n = len(hits)
+            print(f"{n} variable{'' if n == 1 else 's'} matching {a.search!r}")
+            if not n:
+                # A zero here is usually vocabulary, not absence. Say so, because
+                # "no match" reads as "the survey never asked this".
+                print("  the index has the text the agencies published, which is "
+                      "terse for BRFSS.\n  try a plainer word, or --find on a "
+                      "name fragment.", file=sys.stderr)
+        return REASONS[key]["exit"]
 
     if a.find:
         hits = find(db, a.find)

@@ -17,7 +17,7 @@ import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from covary import (connect, analyze, render, resolve, empty_payload, stamp,
-                    REASONS, all_names, DBS)
+                    REASONS, all_names, DBS, search, labels_db, LABELS)
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -54,6 +54,92 @@ def validate(a):
     if not isinstance(m, int) or isinstance(m, bool) or m < 0:
         return "min_n must be a non-negative integer"
     return None
+
+def validate_search(a):
+    """Same rule as validate(): a malformed call must not be answerable.
+
+    An empty query would match nothing and read as "the survey never asked
+    this", which is the one wrong answer this tool can give.
+    """
+    if not isinstance(a, dict):
+        return "arguments must be an object"
+    q = a.get("query")
+    if not isinstance(q, str) or not q.strip():
+        return "query is required and must be a non-empty string"
+    if len(q) > 500:
+        return "query cannot exceed 500 characters"
+    a["query"] = q.strip()
+    d = a.get("dataset")
+    if d is not None and d not in DATASETS:
+        return f"dataset must be one of {', '.join(DATASETS)}, got {d!r}"
+    n = a.get("limit", 20)
+    if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 100:
+        return "limit must be an integer between 1 and 100"
+    return None
+
+
+SEARCH_TOOL = {
+    "name": "search_variables",
+    "description": (
+        "Find GSS, NHANES or BRFSS variable names from a plain-English topic or "
+        "question, when you do not already know what the survey calls the thing "
+        "you mean. Searches the published item wording and variable descriptions, "
+        "and returns only names that exist in the covary index, so every result "
+        "can be passed straight to check_covariation. Use this FIRST whenever you "
+        "are reasoning from a research question rather than from a list of "
+        "variable names, instead of guessing a name: a guessed name that does not "
+        "exist wastes a call, and a guessed name that does exist may ask something "
+        "other than what you meant. Read the returned description before using a "
+        "name. BRFSS FIREARM5 is whether a firearm is kept in the home while "
+        "GUNLOAD is how it is stored, and nothing but the description distinguishes "
+        "them. Results are ranked, not authoritative: text quality varies by "
+        "agency, being richest for GSS and terse for BRFSS, so a thin result set "
+        "means the wording differs from yours, not that the survey never asked it."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "A topic or question in plain words, e.g. "
+                               "'how often do you see friends' or 'firearm storage "
+                               "in the home' or 'fasting blood glucose'.",
+            },
+            "dataset": {
+                "type": "string", "enum": ["gss", "nhanes", "brfss"],
+                "description": "Restrict to one dataset.",
+            },
+            "limit": {
+                "type": "integer", "default": 20,
+                "description": "Maximum results, 1 to 100.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+def run_search(query, dataset=None, limit=20):
+    if labels_db() is None:
+        return (f"No text index at {LABELS}. Build it with: "
+                "Rscript build_labels.R && python3 pack_labels.py. "
+                "check_covariation still works without it."), True
+    db = connect(dataset)
+    hits = search(db, query, limit)
+    if not hits:
+        return (f"No variable text matches {query!r}. This is usually vocabulary "
+                "rather than absence: the index carries the wording each agency "
+                "published, which is rich for GSS and terse for BRFSS. Try plainer "
+                "or fewer words. Do NOT report to the user that the survey does not "
+                "measure this."), False
+    lines = [f"{len(hits)} variable(s) matching {query!r}, best first:"]
+    for d, v, desc, q in hits:
+        lines.append(f"  {d:<7} {v:<14} {desc}")
+    lines.append("\nThese names exist in the index. Ranking is by text match only "
+                 "and says NOTHING about whether they were administered together: "
+                 "pass the ones you want to check_covariation to find that out.")
+    return "\n".join(lines), False
+
 
 TOOL = {
     "name": "check_covariation",
@@ -159,8 +245,23 @@ def handle(req):
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "covary", "version": "0.1.0"}}}
     if m == "tools/list":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [TOOL]}}
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [SEARCH_TOOL, TOOL]}}
     if m == "tools/call":
+        if p.get("name") == SEARCH_TOOL["name"]:
+            a = p.get("arguments", {})
+            bad = validate_search(a)
+            if bad:
+                return {"jsonrpc": "2.0", "id": rid,
+                        "error": {"code": -32602, "message": bad}}
+            try:
+                text, is_err = run_search(a["query"], a.get("dataset"),
+                                          a.get("limit", 20))
+            except BaseException as e:
+                # BaseException for the same reason as below: connect() exits.
+                text, is_err = f"covary failed: {type(e).__name__}: {e}", True
+            return {"jsonrpc": "2.0", "id": rid,
+                    "result": {"content": [{"type": "text", "text": text}],
+                               "isError": is_err}}
         if p.get("name") != TOOL["name"]:
             return {"jsonrpc": "2.0", "id": rid,
                     "error": {"code": -32602, "message": f"no such tool: {p.get('name')}"}}
