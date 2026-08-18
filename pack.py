@@ -149,8 +149,22 @@ def verify(n_pairs=40, seed=0):
     # while the bitmap sets the bit once, which surfaces below as "corrupt bits"
     # and sends you looking at the packer instead of the index.
     # Per file. Grouping all 1.16 billion rows in one pass exhausts memory, and
-    # a stratum never spans files, so per file is both cheaper and sufficient.
+    # per file is sufficient ONLY because a file is exactly one stratum. That
+    # invariant broke once, when rehoming wrote rows into a pooled-named file
+    # while the same stratum also had its own, and the cross-file duplicate was
+    # invisible here while surfacing later as "the packed db is corrupt". So
+    # assert the invariant rather than relying on it.
+    # The property is that a STRATUM does not span files, not that a file holds one
+    # stratum: a BRFSS file is a year and holds ~53 state strata, which is fine.
     dup = 0
+    seen = {}
+    for f in sorted(glob.glob(IDX)):
+        for (st,) in con.execute("select distinct stratum from read_parquet(?)", [f]).fetchall():
+            if st in seen:
+                bad += 1
+                print(f"  stratum {st} spans {seen[st]} and {os.path.basename(f)}; "
+                      "the per-file duplicate check below cannot see across files")
+            seen[st] = os.path.basename(f)
     for f in sorted(glob.glob(IDX)):
         n = con.execute(
             "select count(*) - count(distinct (stratum, unit_id, variable)) "

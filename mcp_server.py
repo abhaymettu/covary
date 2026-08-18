@@ -16,8 +16,7 @@ Register it with:
 import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from covary import (connect, marginals, joint, denominators, show_joint, resolve,
-                    suggest, all_names, absences, show_absences, leave_one_out, DBS)
+from covary import connect, marginals, report, resolve, suggest, DBS
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -123,82 +122,17 @@ def run(variables, dataset=None, min_n=1):
                 out.append(f"  did you mean: {', '.join(sg)}")
         return "\n".join(out), True
 
-    lines = list(notes) + ["Per variable, ignoring co-administration:"]
-    for v, ds, n, lo, hi, ns in marg:
-        span = lo if lo == hi else f"{lo} .. {hi}"
-        lines.append(f"  {v}  dataset={ds}  n={n}  {span}, {ns} strat{'um' if ns == 1 else 'a'}")
-
-    datasets = {r[1] for r in marg}
-    if len(datasets) > 1 and not dataset:
-        lines.append(
-            f"\nThese variables span {', '.join(sorted(datasets))}. A stratum belongs to one "
-            "dataset, so this set can never have a joint n. Set `dataset` to one of them.")
-
-    if len(datasets) > 1 and not dataset:
-        # The span note above IS the answer. Printing NOT USABLE plus a
-        # leave-one-out under it invites exactly the misread this tool exists
-        # to prevent.
-        return "\n".join(lines), False
-
-    rows = joint(db, variables, dataset, min_n)
-    usable = [r for r in rows if r[2] > 0]
-    if not usable:
-        near = joint(db, variables, dataset, 1)
-        lines.append(
-            f"\nNOT USABLE. No respondent is non-missing on all of these in any "
-            f"stratum this index covers"
-            + (f" at a joint n of {min_n} or more." if min_n > 1 else "."))
-        if near:
-            best = max(near, key=lambda r: r[2])
-            lines.append(
-                f"They DO co-occur below your threshold. Largest is {best[0]} "
-                f"{best[1]} at n={best[2]}. Lower min_n rather than abandoning this.")
-        else:
-            lines.append(
-                "Before concluding these were never asked together, check two things. "
-                "This index covers gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, "
-                "so an earlier or later administration is invisible here. And a "
-                "question skipped because of a filter, for example one only asked of "
-                "respondents who answered yes earlier, is absent for that reason and "
-                "not because it was left off the instrument. Call again with min_n 0 "
-                "to see strata where all of these were collected but no respondent "
-                "has them all.")
-            zero = [r for r in joint(db, variables, dataset, 0) if r[3]]
-            if zero:
-                lines.append(
-                    f"Note: {len(zero)} stratum or strata collected all of these and "
-                    "contain a pair of variables with no respondent in common. A split "
-                    "ballot and a skip pattern both look exactly like this and cannot "
-                    "be told apart from presence alone, so the codebook decides which "
-                    "it is. Do not report either mechanism to the user as established.")
-        # What to give up, and where each stratum went. The decision on a NOT
-        # USABLE is which variable to drop, not whether to give up, and an agent
-        # that is only told "no" will report the design as dead.
-        loo = leave_one_out(db, variables, dataset, min_n)
-        if loo:
-            lines.append(f"\nBest reachable by dropping one variable "
-                         f"(at min_n={min_n}):")
-            for d, ds, st, n in loo:
-                lines.append(f"  without {d}: {ds} {st} n={n}")
-        why = absences(db, variables, dataset, datasets)
-        if why[0] or why[1]:
-            lines.append("\nWhere the strata went, absent variable named per group:")
-            lines.extend(show_absences(why))
-        return "\n".join(lines), False
-
-    why = absences(db, variables, dataset, datasets)
-    denom = denominators(db, dataset)
-    lines.append(f"\nUsable strata, every variable present on the same respondent (min_n={min_n}):")
-    lines.extend(l.replace("(CLI: --all)", "(ask again with fewer variables to see all)")
-                  .replace(", use --all", "")
-                 for l in show_joint(usable, denom, cap=12))
-    if why[0] or why[1]:
-        lines.append("\nStrata that dropped out, absent variable named per group:")
-        lines.extend(show_absences(why))
-    lines.append(
-        "\nPresence means non-missing on the actual variable, so a respondent who "
-        "skipped a module or an exam is correctly absent.")
-    return "\n".join(lines), False
+    # One renderer, shared with the CLI. This used to be a second implementation,
+    # and every caveat then had to be remembered in two places. It was not: the
+    # overlap warning and the mode note were wired to the CLI only, so a model
+    # reading this interface added two strata that describe the same people and
+    # reported an inflated N. A caveat a caller can forget is not a caveat.
+    lines, ok = report(db, variables, dataset, min_n, min_year=None, for_agent=True)
+    text = "\n".join(list(notes) + lines)
+    text += ("\n\nPresence means non-missing on the actual variable, so a respondent "
+             "who skipped a module or an exam is correctly absent. Read any warning "
+             "above before reporting a total to the user.")
+    return text, False
 
 
 def handle(req):

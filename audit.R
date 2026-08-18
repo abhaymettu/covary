@@ -93,6 +93,15 @@ if (!all(c("iap", "don't know", "no answer", "skipped on web") %in% sent)) {
 # repeat it. Nothing here tests skip-vs-not-administered, in any dataset, and that
 # gap is the honest limit of this audit.
 
+# A unit_id must be claimed by exactly one nhanes stratum. The rehoming joins on
+# it, so a SEQN in two cycles would row-multiply without complaint, and the word
+# "exact" in DECISIONS.md rests on this holding.
+cat("\nnhanes respondent identity\n")
+nh <- idx |> filter(dataset == "nhanes") |> distinct(unit_id, stratum) |> collect()
+d <- sum(duplicated(nh$unit_id))
+if (d) fail(d, "nhanes unit_ids appear in more than one stratum") else
+  ok(format(nrow(nh), big.mark = ","), "nhanes respondents, each in exactly one stratum")
+
 # ---- GSS against source, exact ---------------------------------------------
 cat("\ngss against gssr source, exact match\n")
 gvars <- idx |> filter(dataset == "gss") |> distinct(variable) |> collect() |> pull(variable)
@@ -152,6 +161,12 @@ for (i in pick) {
   got <- vapply(names(src), function(v)
     sum(nh_key[paste(cycles, v)], na.rm = TRUE), numeric(1))
   short <- names(src)[got < src]
+  # No overcount check here. A variable published in two tables of the same cycle
+  # legitimately has more respondents in the index than in either table alone:
+  # LBX2DF is in VOCWB_I (3,083) and VOCWBS_I (3,010) and the index holds the
+  # union, 3,447. A blanket overcount check flagged 329 of those. Whether the
+  # rehoming filed anyone into the wrong cycle is checked against CDC's own
+  # rosters below, which is the question that was actually being asked.
   if (length(short))
     fail(tb, cyc, "undercounts", length(short), "variables, worst:",
          paste(head(short, 5), collapse = ","))
@@ -159,6 +174,38 @@ for (i in pick) {
   if (FULL && checked %% 100 == 0) cat("  ...", checked, "of", length(pick), "tables\n")
 }
 if (fails == before) ok(checked, "nhanes tables, no variable undercounted")
+
+# Does every nhanes respondent sit in the cycle CDC puts them in? The rehoming
+# derives a respondent's cycle from the index itself, so checking the index
+# against the index would prove nothing. DEMO is the roster for a cycle, so ask
+# CDC. This is what stands behind the word "exact" in DECISIONS.md.
+# Gated on FULL explicitly. It was gated on `length(pick) > 50`, which referred to
+# a variable defined further down the file, so the block could silently not run.
+# A check that can quietly skip itself is not a check, which is this project's
+# recurring failure wearing yet another hat.
+if (FULL) {
+  cat("\nnhanes respondents against CDC cycle rosters\n")
+  before <- fails
+  demo <- man[grepl("^(P_)?DEMO", man$Table), ]
+  roster <- list()
+  for (i in seq_len(nrow(demo))) {
+    d <- tryCatch(read_xpt(paste0("https://wwwn.cdc.gov", demo$DataURL[i])),
+                  error = function(e) NULL)
+    if (!is.null(d) && "SEQN" %in% names(d))
+      roster[[demo$Years[i]]] <- as.character(d$SEQN)
+  }
+  idx_units <- idx |> filter(dataset == "nhanes") |> distinct(stratum, unit_id) |> collect()
+  for (st in unique(idx_units$stratum)) {
+    if (is.null(roster[[st]])) next          # pooled spans have no DEMO of their own
+    mine <- idx_units$unit_id[idx_units$stratum == st]
+    stray <- setdiff(mine, roster[[st]])
+    if (length(stray))
+      fail(st, "has", length(stray), "respondents CDC does not list in that cycle")
+  }
+  if (fails == before)
+    ok("every nhanes respondent sits in the cycle CDC's DEMO file puts them in")
+}
+
 
 # ---- BRFSS against source, exact -------------------------------------------
 # One file per year, so unlike NHANES there is no multi-file dedup and the count

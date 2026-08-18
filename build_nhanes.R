@@ -133,18 +133,31 @@ for (cyc in unique(man$Years)) {
 # See nhanes_strata.R for why filing them separately understated a real joint n
 # by 40x.
 cat("rehoming pooled-file rows\n")
-for (p in names(NHANES_POOLED_PARTS)) {
-  f <- file.path("index", paste0("nhanes_", p, ".parquet"))
-  if (!file.exists(f)) next
-  pooled <- read_parquet(f)
-  homes <- bind_rows(lapply(NHANES_POOLED_PARTS[[p]], function(c) {
-    g <- file.path("index", paste0("nhanes_", c, ".parquet"))
-    if (file.exists(g)) distinct(read_parquet(g), unit_id) |> mutate(home = c) else NULL
-  }))
-  if (!nrow(homes)) next
-  moved <- pooled |> left_join(homes, by = "unit_id") |>
-    mutate(stratum = coalesce(home, stratum)) |> select(-home) |>
-    distinct() |> arrange(variable, stratum)
-  write_parquet(moved, f, compression = "zstd")
-  cat("  ", p, ":", sum(moved$stratum != p), "of", nrow(moved), "rows rehomed\n")
+all_p <- bind_rows(lapply(list.files("index", "^nhanes_.*[.]parquet$", full.names = TRUE),
+                          read_parquet))
+homes <- all_p |>
+  filter(!stratum %in% names(NHANES_POOLED_PARTS)) |>
+  distinct(unit_id, .keep_all = FALSE) |>
+  left_join(all_p |> filter(!stratum %in% names(NHANES_POOLED_PARTS)) |>
+              distinct(unit_id, stratum), by = "unit_id")
+homes <- homes[!duplicated(homes$unit_id), ]
+names(homes)[2] <- "home"
+
+moved <- all_p |> left_join(homes, by = "unit_id") |>
+  mutate(stratum = if_else(stratum %in% names(NHANES_POOLED_PARTS) & !is.na(home),
+                           home, stratum)) |>
+  select(dataset, stratum, unit_id, variable) |>
+  distinct()
+cat("  rows:", nrow(all_p), "->", nrow(moved), "after rehoming and dedupe\n")
+
+# One file per stratum. Writing rehomed rows back into the pooled-named file left
+# a stratum spanning two files, which pack.py's per-file duplicate check cannot
+# see, so a cross-file duplicate surfaced later as "the packed db is corrupt".
+# A file is a stratum; that invariant is what makes the cheap check sufficient.
+unlink(list.files("index", "^nhanes_.*[.]parquet$", full.names = TRUE))
+for (st in sort(unique(moved$stratum))) {
+  write_parquet(moved |> filter(stratum == st) |> arrange(variable, unit_id),
+                file.path("index", paste0("nhanes_", st, ".parquet")),
+                compression = "zstd")
 }
+cat("  wrote", length(unique(moved$stratum)), "stratum files\n")

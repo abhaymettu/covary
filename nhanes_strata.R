@@ -23,29 +23,17 @@
 #
 # This is exact rather than an approximation: the SEQNs are the same people.
 #
-# Shared by build_nhanes.R and audit.R. A rule like this in two places has already
-# drifted twice in this project and both times the audit blamed the data.
+# NHANES_POOLED_PARTS below is the whole rule, and it is genuinely shared:
+# build_nhanes.R rehomes with it and audit.R sums across the same cycles.
+#
+# An earlier version of this file also defined a nhanes_rehome() helper and the
+# header said the rule was shared. Nothing ever called it, build_nhanes.R had its
+# own inline copy, and the two had already drifted: the dead function listed
+# "2007-2012" twice and two spans the live rule did not know about. A file that
+# describes code nobody runs is worse than no file, because it reads as the
+# authority. Deleted rather than wired up, since the live version is four lines.
 
-# Given a data frame of (stratum, unit_id, variable) rows for NHANES, move rows
-# whose unit_id is claimed by a real cycle out of any pooled stratum.
-nhanes_rehome <- function(pres, pooled = c("1999-2004", "2007-2012", "1999-2023",
-                                           "2007-2012", "1988-2020")) {
-  home <- pres[!pres$stratum %in% pooled, c("unit_id", "stratum")]
-  home <- home[!duplicated(home$unit_id), ]
-  names(home)[2] <- "home_stratum"
 
-  moved <- merge(pres, home, by = "unit_id", all.x = TRUE, sort = FALSE)
-  is_pooled <- moved$stratum %in% pooled & !is.na(moved$home_stratum)
-  n <- sum(is_pooled)
-  moved$stratum[is_pooled] <- moved$home_stratum[is_pooled]
-  moved$home_stratum <- NULL
-  if (n) cat("  rehomed", format(n, big.mark = ","), "pooled-file rows to their own cycle\n")
-  unique(moved[, c("dataset", "stratum", "unit_id", "variable")])
-}
-
-# Which real cycles a pooled span draws its respondents from. Used by audit.R,
-# which otherwise looks for a pooled table's variables under the pooled label and
-# reports a correct index as missing.
 NHANES_POOLED_PARTS <- list(
   "1999-2004" = c("1999-2000", "2001-2002", "2003-2004"),
   "2007-2012" = c("2007-2008", "2009-2010", "2011-2012")

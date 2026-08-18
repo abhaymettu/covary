@@ -79,7 +79,7 @@ def mode_note(db, rows):
     disjointness heuristic ended up backwards.
     """
     yrs = sorted({st for ds, st, *_ in rows if ds == "gss"})
-    if len(yrs) < 2:
+    if not yrs:
         return None
     have = {r[0] for r in db.execute(
         "select distinct stratum from bm where dataset='gss' and variable='mode'")}
@@ -250,7 +250,37 @@ def joint(db, vars_, dataset, min_n):
     return sorted(out)
 
 
-def leave_one_out(db, vars_, dataset, min_n=1, k=3):
+def usable_strata(db, vars_, dataset, min_n, min_year):
+    """The single definition of "usable". Returns (all_rows, usable_rows).
+
+    Both thresholds live here because they did not, and that cost three bugs. The
+    text branch, the JSON branch and leave_one_out each applied their own subset:
+    --min got audited after round two and --min-year did not, so leave-one-out
+    promised n=2690 under a query whose pooled threshold was 5000. A fix that
+    lands on the flag a report happens to name will keep missing its siblings.
+    """
+    rows = joint(db, vars_, dataset, min_n)
+    out = [r for r in rows if r[2] > 0]
+    if min_year:
+        tot = {}
+        for ds, st, n, _ in out:
+            k = (ds, st.partition("|")[0])
+            tot[k] = tot.get(k, 0) + n
+        out = [r for r in out if tot[(r[0], r[1].partition("|")[0])] >= min_year]
+    return rows, out
+
+
+def threshold_label(min_n, min_year):
+    """One phrasing of the thresholds, so no message can describe a different one."""
+    bits = []
+    if min_n != 1:
+        bits.append(f"min {min_n}")
+    if min_year:
+        bits.append(f"pooled min {min_year}")
+    return ", ".join(bits) if bits else "min 1"
+
+
+def leave_one_out(db, vars_, dataset, min_n=1, min_year=None, k=3):
     """When nothing works, which single variable is responsible?
 
     That is the decision an analyst is actually making on a NONE: not "is this
@@ -271,8 +301,11 @@ def leave_one_out(db, vars_, dataset, min_n=1, k=3):
     out = []
     for v in vars_:
         rest = [x for x in vars_ if x != v]
-        best = max(joint(db, rest, dataset, min_n), key=lambda r: r[2], default=None)
-        if best:
+        _, u = usable_strata(db, rest, dataset, min_n, min_year)
+        best = max(u, key=lambda r: r[2], default=None)
+        # n of 0 is not "reachable". Dropping the variable produces the same NONE
+        # with one fewer name in it.
+        if best and best[2] > 0:
             out.append((v, best[0], best[1], best[2]))
     return sorted(out, key=lambda r: -r[3])[:k]
 
@@ -378,6 +411,143 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
     return out
 
 
+def report(db, vars_, dataset, min_n, min_year, cap=12, for_agent=False, detail=False):
+    """Render one answer. The ONLY place a result is turned into words.
+
+    Both interfaces call this. They used not to: `main` and the MCP `run`
+    each assembled their own text, so every caveat had to be remembered twice and
+    three rounds of testing found the same defect three times. The worst instance
+    shipped an unwarned double count to the agent interface while the CLI warned
+    correctly, and a fresh model added the two overlapping strata together and
+    handed a researcher an inflated N. A caveat that a caller can forget is not a
+    caveat.
+
+    Returns (lines, ok). ok is False when no stratum is usable.
+    """
+    L = []
+    lim = cap if cap is not None else 10 ** 9   # --all passes None
+    # Listing threshold, separate from the truncation cap. A range implies
+    # continuous coverage, which is wrong for four scattered GSS years and right
+    # for twelve consecutive NHANES cycles. Eight is where listing stops helping.
+    LIST_UPTO = 8
+    marg = marginals(db, vars_, dataset)
+    datasets = {r[1] for r in marg}
+
+    L.append("per variable, ignoring co-administration:")
+    for v, ds, n, lo, hi, ns in marg:
+        # List the strata when they will fit. "1985 .. 2024, 4 strata" reads as
+        # continuous coverage and those four years are 1985, 1987, 2004 and 2024.
+        if ns <= min(lim, LIST_UPTO):
+            got = [r[0] for r in db.execute(
+                "select distinct substr(stratum,1,instr(stratum||'|','|')-1) from bm"
+                " where variable = ? and dataset = ? order by 1", (v, ds))]
+            span = ", ".join(got)
+        else:
+            span = f"{lo} .. {hi}, {ns} strata"
+        # Does this variable actually appear in a stratum that shares people with
+        # another? Checking the span endpoints missed it: BMXBMI spans 1999-2000
+        # to 2021-2023 and the overlapping stratum sits in the middle.
+        vs = {r[0] for r in db.execute(
+            "select distinct stratum from bm where variable = ? and dataset = ?", (v, ds))}
+        dbl = ""
+        for (d2, st), others in PHYSICAL_OVERLAP.items():
+            if d2 == ds and st in vs and any(o in vs for o in others):
+                dbl = "  <- counts some people twice, see warning below"
+                break
+        L.append(f"  {v:<12} {ds:<7} n={n:<8} {span}{dbl}")
+
+    if len(datasets) > 1 and not dataset:
+        L.append("")
+        L.append(f"These variables span {', '.join(sorted(datasets))}. A stratum belongs to"
+                 " one dataset, so this set can never have a joint n. Name one dataset.")
+        return L, False          # that note IS the answer; do not bury it
+
+    rows, usable = usable_strata(db, vars_, dataset, min_n, min_year)
+    why = absences(db, vars_, dataset, datasets)
+    label = threshold_label(min_n, min_year)
+
+    L.append("")
+    L.append(f"jointly on the same respondents ({label}):")
+
+    if usable:
+        L.extend(show_joint(usable, denominators(db, dataset), cap))
+        if min_n == 0:
+            z = [r for r in rows if r[2] == 0]
+            if z:
+                L.append("")
+                L.append("also collected together, with no respondent having all of them:")
+                L.extend(show_joint(z, denominators(db, dataset), cap))
+                L.append("  A split ballot and a skip pattern both look exactly like this,")
+                L.append("  so presence cannot tell them apart. The codebook decides.")
+    else:
+        L.append(f"  NONE. No respondent is non-missing on all of these in any stratum")
+        L.append(f"  covered by this index at {label}.")
+        # Look below the threshold, not inside the already-filtered rows. joint()
+        # applied min_n, so at a high threshold `rows` is empty and there is
+        # nothing left to point at.
+        near = [r for r in joint(db, vars_, dataset, 1) if r[2] > 0]
+        best = max(near, key=lambda r: r[2], default=None)
+        if best:
+            L.append(f"  They DO co-occur below your threshold. Largest is {best[0]} "
+                     f"{best[1]} at n={best[2]}. Lower the threshold that excluded them"
+                     f"{' (--min-year)' if min_year and best[2] >= min_n else ''}.")
+        else:
+            L.append("  Before concluding these were never asked together: this index covers")
+            L.append("  gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an earlier or")
+            L.append("  later administration is invisible here. And a question skipped by a")
+            L.append("  filter is absent for that reason, not because it was left off the")
+            L.append("  instrument. Ask again with a threshold of 0 to see strata where all")
+            L.append("  of these were collected but no respondent has them all.")
+        zeros = [r for r in (rows if min_n == 0
+                             else joint(db, vars_, dataset, 0)) if r[2] == 0]
+        if zeros:
+            n_dis = sum(1 for r in zeros if r[3])
+            L.append("")
+            L.append(f"  {len(zeros)} stratum or strata collected all of these and still have")
+            L.append("  no respondent with all of them.")
+            if n_dis:
+                L.append(f"  {n_dis} of those contain a pair with no respondent in common.")
+                L.append("  A split ballot and a skip pattern both look exactly like this, so")
+                L.append("  the codebook decides which it is.")
+        loo = leave_one_out(db, vars_, dataset, min_n, min_year)
+        if loo:
+            L.append("")
+            L.append(f"  best reachable by dropping one variable, at {label}:")
+            for d, ds2, st, n in loo:
+                L.append(f"    without {d:<12} {ds2} {st} n={n}")
+        elif len(vars_) > 1:
+            L.append("")
+            L.append(f"  no single variable is responsible: dropping any one of them still")
+            L.append(f"  leaves nothing at {label}.")
+
+    if why and (why[0] or why[1]):
+        L.append("")
+        L.append("strata that dropped out:")
+        # --why raises the cap on this section rather than gating it. The refactor
+        # made absences unconditional, which quietly turned --why into a no-op
+        # while --help still advertised it as opt-in.
+        L.extend(show_absences(why, cap if detail else min(3, lim)))
+        if not detail and (len(why[0]) > 3):
+            L.append(f"    ({len(why[0]) - 3} more; --why for all of them)")
+
+    # Caveats. Rendered here so neither interface can forget them.
+    mn = mode_note(db, usable or rows)
+    if mn:
+        L.append("")
+        L.append(f"  note: gss records an interview `mode` variable in {', '.join(mn)}. A")
+        L.append("  joint n does not tell you the mode was comparable across those years.")
+    for ds, st, clash in overlap_warning(usable or rows):
+        L.append("")
+        L.append(f"  warning: {ds} {st} and {', '.join(clash)} contain the same people")
+        L.append("  under different respondent ids. Do not pool them or add their n together,")
+        L.append("  and note the per-variable n above sums both. Pick one.")
+
+    if for_agent:
+        L = [l.replace("(CLI: --all)", "(ask again with fewer variables)")
+              .replace(", use --all", "") for l in L]
+    return L, bool(usable)
+
+
 def main():
     p = argparse.ArgumentParser(description="Joint availability of variables on the same respondents.")
     p.add_argument("variables", nargs="*")
@@ -433,7 +603,6 @@ def main():
         print("  pass --dataset, or spell it as that dataset spells it", file=sys.stderr)
         return 2
     marg = marginals(db, a.variables, a.dataset)
-
     missing = [v for v in a.variables if v not in {r[0] for r in marg}]
     if missing:
         names = all_names(db)          # one scan, however many names are unknown
@@ -454,146 +623,42 @@ def main():
                 print(f"  no near match for {m!r}; try --find PATTERN", file=sys.stderr)
         return 2   # a bad name is not a dead design; keep the exit codes distinct
 
-    say("per variable, ignoring co-administration:")
-    for v, ds, n, lo, hi, ns in marg:
-        # List them when there are few. "1985 .. 2024, 4 strata" reads as
-        # continuous coverage and those four years are 1985, 1987, 2004 and 2024.
-        if ns <= 6 and not a.dataset == "brfss":
-            got = [r[0] for r in db.execute(
-                "select distinct substr(stratum,1,instr(stratum||'|','|')-1) from bm"
-                " where variable = ? and dataset = ? order by 1", (v, ds))]
-            span = ", ".join(got)
-        else:
-            span = lo if lo == hi else f"{lo} .. {hi}"
-        say(f"  {v:<12} {ds:<7} n={n:<8} {span}"
-            f"{'' if ns <= 6 else f', {ns} strata'}")
-
-    datasets = {r[1] for r in marg}
-    if len(datasets) > 1 and not a.dataset:
-        say(f"\n  note: these variables span {', '.join(sorted(datasets))}. A stratum belongs to")
-        say("  one dataset, so a cross-dataset set can never have a joint n. Use --dataset.")
-
-    rows = joint(db, a.variables, a.dataset, a.min)
-    if a.min_year:
-        # Pooling grain. An analyst who pools states across a BRFSS year cares
-        # about the year total, and a per-stratum threshold drops small states
-        # they would have kept.
-        tot = {}
-        for ds, st, n, _ in rows:
-            tot[(ds, st.partition("|")[0])] = tot.get((ds, st.partition("|")[0]), 0) + n
-        rows = [r for r in rows
-                if tot[(r[0], r[1].partition("|")[0])] >= a.min_year]
-    usable = [r for r in rows if r[2] > 0]
-
-    def as_strata(rs):
-        return [{"dataset": d, "stratum": s, "n": n, "collected_but_disjoint": f}
-                for d, s, n, f in rs]
-
-    if usable:
-        why = absences(db, a.variables, a.dataset, datasets) if a.why else None
-        if a.json:
-            print(json.dumps({
-                "variables": a.variables, "dataset": a.dataset, "min": a.min,
-                "min_year": a.min_year or None, "notes": [n.strip() for n in notes],
-                "marginals": [{"variable": v, "dataset": d, "n": n, "first": lo,
-                               "last": hi, "strata": ns} for v, d, n, lo, hi, ns in marg],
-                "usable": as_strata(usable), "dropped": as_dropped(why) if why else None, "ok": True,
-            }, indent=2))
-            return 0
-        print(f"\njointly on the same respondents (min {a.min}"
-              f"{f', pooled min {a.min_year}' if a.min_year else ''}):")
-        print("\n".join(show_joint(usable, denominators(db, a.dataset), cap)))
-        if a.min == 0:
-            z = [r for r in rows if r[2] == 0]
-            if z:
-                print("\nalso collected together, with no respondent having all of them:")
-                print("\n".join(show_joint(z, denominators(db, a.dataset), cap)))
-                print("  A pair with no respondent in common is a split ballot or a skip")
-                print("  pattern. Both look identical here, so the codebook decides.")
-        if why and (why[0] or why[1]):
-            print("\nstrata that dropped out:")
-            print("\n".join(show_absences(why, cap)))
-        mn = mode_note(db, usable)
-        if mn:
-            print(f"\n  note: gss records an interview `mode` variable in {', '.join(mn)}.")
-            print("  A joint n does not tell you the mode was comparable across the years")
-            print("  above. Check `mode` before pooling or trending across them.")
-        for ds, st, clash in overlap_warning(usable):
-            print(f"\n  warning: {ds} {st} and {', '.join(clash)} describe some of the")
-            print("  same people under different respondent ids. Do not pool them or add")
-            print("  their n together. Pick one.")
-        return 0
-
-    # Nothing usable. Say only what the index can support, then say what to do
-    # about it. "Never administered together" is a claim about the world and it
-    # was wrong three ways: below a high --min, outside the indexed year range,
-    # and for questions skipped by a filter rather than absent from the instrument.
-    # joint(min_n=0) returns everything, so filter. Reporting len() of that as
-    # the zero count contradicted the line above it three lines later.
-    zeros = [r for r in (rows if a.min == 0 else joint(db, a.variables, a.dataset, 0))
-             if r[2] == 0]
-    disjoint = sum(1 for r in zeros if r[3])
-    why = absences(db, a.variables, a.dataset, datasets)
-    loo = leave_one_out(db, a.variables, a.dataset, a.min)
-    near = joint(db, a.variables, a.dataset, 1)
-    best = max(near, key=lambda r: r[2]) if near else None
+    rows, usable = usable_strata(db, a.variables, a.dataset, a.min, a.min_year)
+    why = absences(db, a.variables, a.dataset,
+                   {r[1] for r in marginals(db, a.variables, a.dataset)})
+    zeros = [r for r in (rows if a.min == 0
+                         else joint(db, a.variables, a.dataset, 0)) if r[2] == 0]
 
     if a.json:
+        marg = marginals(db, a.variables, a.dataset)
+        loo = leave_one_out(db, a.variables, a.dataset, a.min, a.min_year)
         print(json.dumps({
-            "variables": a.variables, "dataset": a.dataset, "min": a.min,
-            "min_year": a.min_year or None, "notes": [n.strip() for n in notes],
+            "variables": a.variables, "dataset": a.dataset,
+            "min": a.min, "min_year": a.min_year or None,
+            "notes": [n.strip() for n in notes],
             "marginals": [{"variable": v, "dataset": d, "n": n, "first": lo,
                            "last": hi, "strata": ns} for v, d, n, lo, hi, ns in marg],
-            "usable": [], "zero": as_strata(zeros), "dropped": as_dropped(why),
-            "collected_but_no_overlap": {"strata": len(zeros), "disjoint": disjoint},
-            "below_threshold": ({"dataset": best[0], "stratum": best[1], "n": best[2]}
-                                if best else None),
+            "usable": [{"dataset": ds, "stratum": st, "n": n} for ds, st, n, _ in usable],
+            # zero strata belong in BOTH branches. They used to be built only when
+            # nothing was usable, so a pipeline reading --min 0 --json never saw
+            # GSS 2004, which is the case this whole tool opens with.
+            "zero": [{"dataset": ds, "stratum": st,
+                      "pair_with_no_overlap": bool(f)} for ds, st, _, f in zeros],
+            "collected_but_no_overlap": {"strata": len(zeros),
+                                         "disjoint": sum(1 for r in zeros if r[3])},
+            "dropped": as_dropped(why),
             "leave_one_out": [{"drop": d, "dataset": ds, "stratum": st, "n": n}
                               for d, ds, st, n in loo],
-            "ok": False,
+            "overlapping_strata": [{"dataset": ds, "stratum": st, "shares_people_with": c}
+                                   for ds, st, c in overlap_warning(usable or rows)],
+            "ok": bool(usable),
         }, indent=2))
-        return 1
+        return 0 if usable else 1
 
-    if not loo and len(a.variables) > 1:
-        pass
-    print(f"\njointly on the same respondents (min {a.min}):")
-    # Print zeros whenever --min 0 asked for them. They used to appear only in the
-    # not-usable branch, so GSS 2004, the split ballot the README opens with,
-    # appeared in no covary output at all and exited 0.
-    if a.min == 0 and zeros:
-        # --min 0 asked to see them; they are still not a usable design.
-        print("\n".join(show_joint(zeros, denominators(db, a.dataset), cap)))
-        print("\n  No usable stratum: every one above has a joint n of 0.")
-    else:
-        print("  NONE. No respondent is non-missing on all of these in any stratum")
-        print(f"  covered by this index{f' at a joint n of {a.min} or more' if a.min > 1 else ''}.")
-        if best:
-            print(f"  They DO co-occur below your threshold. Largest is "
-                  f"{best[0]} {best[1]} at n={best[2]}. Lower --min to see them.")
-        else:
-            print("  Check the indexed range before concluding the questions never")
-            print("  co-occurred: gss 1972-2024, nhanes 1999-2023, brfss 2011-2023.")
-
-    if zeros:
-        s = "stratum" if len(zeros) == 1 else "strata"
-        print(f"\n  {len(zeros)} {s} collected all of these and still {'has' if len(zeros) == 1 else 'have'}")
-        print("  no respondent with all of them.")
-        if disjoint:
-            print(f"  {disjoint} of those {'has' if disjoint == 1 else 'have'} a pair of"
-                  " variables with no respondent in common at all.")
-            print("  A split ballot and a skip pattern both look exactly like this, so")
-            print("  presence cannot tell them apart. The codebook decides which it is.")
-    if not loo and len(a.variables) > 1:
-        print(f"\n  no single variable is responsible: dropping any one of them")
-        print(f"  still leaves nothing at min {a.min}.")
-    if loo:
-        print(f"\n  best reachable by dropping one variable, at min {a.min}:")
-        for d, ds, st, n in loo:
-            print(f"    without {d:<12} {ds} {st} n={n}")
-    if why[0] or why[1]:
-        print("\n  why the rest dropped out:")
-        print("\n".join(show_absences(why, cap)))
-    return 1
+    lines, ok = report(db, a.variables, a.dataset, a.min, a.min_year, cap,
+                       detail=a.why)
+    print("\n".join(lines))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

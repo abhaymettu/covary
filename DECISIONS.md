@@ -114,8 +114,20 @@ silently deleted the finding.
   a pooled file contributes its variables to whichever cycle each respondent
   already belongs to. This is exact, not an approximation: the SEQNs are the same
   people. Where no cycle claims the SEQN, as with the renumbered pre-pandemic file,
-  the pooled span correctly stays its own stratum. The rule lives in
-  `nhanes_strata.R` and is shared by the builder and the audit.
+  the pooled span correctly stays its own stratum. `NHANES_POOLED_PARTS` in `nhanes_strata.R` is the rule, and it is genuinely
+  shared: the builder rehomes with it, the audit sums across the same cycles.
+  An earlier version of that file also carried a `nhanes_rehome()` helper and this
+  paragraph said the rule was shared. Nothing called it, the builder had its own
+  inline copy, and the two had already drifted. Deleted. That is the third time a
+  document here described code that did not run, after the hand-assembled
+  `audit.log` and the retracted sentence left in `audit.R`, so it is worth naming
+  as a pattern rather than a slip.
+
+  One consequence worth stating: presence is correct after rehoming, but a
+  variable from a six-year pooled specimen file now carries a two-year cycle
+  label, and its sample design is still the six-year pool. covary answers
+  co-administration, not whether a cycle-level analysis of that variable is
+  sound.
 
   `2017-2020` still describes some of the same physical people as `2017-2018` under
   identifiers that cannot be matched, so the marginal counts them twice and the two

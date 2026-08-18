@@ -92,6 +92,45 @@ if python3 covary.py numgiven agape1 --dataset gss --min 0 2>&1 \
   fail=$((fail+1)); echo "  FAIL a split ballot is described as a skip pattern"
 else pass=$((pass+1)); echo "  ok   no mechanism asserted for a split ballot"; fi
 
+echo "round three bugs"
+# every one of these is a caveat or threshold that reached one interface and not
+# its sibling. The pattern, three rounds running, was fixing the path a report
+# named rather than the function both paths call.
+g "min-year is named in the header"        "pooled min" numgiven socfrend --dataset gss --min-year 2000
+t 1 "min-year excludes without lying"      numgiven socfrend happy --min-year 5000 --dataset gss
+g "min-year advice names the right flag"   "min-year" numgiven socfrend happy --min-year 5000 --dataset gss
+g "scattered years are listed, not ranged" "1975, 1980" away9 numgiven --dataset gss
+g "double-counted marginal is footnoted"   "twice" RIAGENDR BMXBMI --dataset nhanes
+g "overlapping strata are warned about"    "the same people" RIAGENDR BMXBMI --dataset nhanes
+
+# leave-one-out must never offer n=0 as reachable
+if python3 covary.py numgiven socfrend lonely1 --dataset gss --min 0 2>&1 \
+     | grep -qE "without .* n=0"; then
+  fail=$((fail+1)); echo "  FAIL leave-one-out offers a joint n of 0 as reachable"
+else pass=$((pass+1)); echo "  ok   leave-one-out never offers n=0"; fi
+
+# --min 0 must carry zero strata into json, not only into the text
+if python3 covary.py numgiven socfrend --dataset gss --min 0 --json | python3 -c '
+import json,sys; d=json.load(sys.stdin)
+assert any(z["stratum"] == "2004" for z in d["zero"]), "gss 2004 missing from json"
+' 2>/dev/null; then pass=$((pass+1)); echo "  ok   --min 0 --json carries the zero strata"
+else fail=$((fail+1)); echo "  FAIL --min 0 --json drops the zero strata"; fi
+
+# the agent interface must receive the same caveats as the CLI
+if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["RIAGENDR","BMXBMI"],"dataset":"nhanes"}}}' \
+   | python3 mcp_server.py | grep -q "the same people"; then
+  pass=$((pass+1)); echo "  ok   mcp gets the overlap warning too"
+else fail=$((fail+1)); echo "  FAIL mcp is missing the overlap warning"; fi
+
+g "--why is not a no-op"                   "more; --why" numgiven socfrend --dataset gss
+g "readme opening example reproduces"      "1985, 1987, 2004, 2024" numgiven socfrend
+
+# a file may hold many strata, but a stratum must not span files, or the cheap
+# per-file duplicate check cannot see the duplicate
+if .venv/bin/python pack.py --verify 2>&1 | grep -q "spans"; then
+  fail=$((fail+1)); echo "  FAIL a stratum spans more than one index file"
+else pass=$((pass+1)); echo "  ok   no stratum spans more than one index file"; fi
+
 echo "nhanes pooled strata"
 t 0 "pooled-file variable joins its own cycle"  SSALB RIAGENDR --dataset nhanes
 g "pooled span no longer appears as a stratum"  "1999-2000" SSALB --dataset nhanes
@@ -101,7 +140,7 @@ if python3 covary.py SSALB --dataset nhanes 2>&1 | grep -qE "1999-2004|2007-2012
   fail=$((fail+1)); echo "  FAIL a pooled span is still its own stratum"
 else pass=$((pass+1)); echo "  ok   pooled spans dissolved into their cycles"; fi
 
-g "warns when strata share people under different ids" "same" RIAGENDR BMXBMI --dataset nhanes
+
 
 # A variable published in both a per-cycle and a pooled NHANES table used to land
 # twice after rehoming, inflating pop above the popcount. Cheap proxy for it here;

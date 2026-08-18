@@ -10,7 +10,7 @@ succeeds, and the research design is dead.
 ```bash
 $ python3 covary.py numgiven socfrend
 per variable, ignoring co-administration:
-  numgiven     gss     n=5819     1985 .. 2024, 4 strata
+  numgiven     gss     n=5819     1985, 1987, 2004, 2024
   socfrend     gss     n=45294    1974 .. 2024, 29 strata
 
 jointly on the same respondents (min 1):
@@ -123,6 +123,9 @@ in. NHANES publishes pooled files spanning several cycles, and where CDC keeps t
 original SEQNs those respondents are filed under their own cycle rather than the
 pooled label. Filing them separately once understated a real joint n by 40x.
 
+covary calls BRFSS strata "states", which is loose: the denominator is 52 to 54
+depending on the year and includes DC, Puerto Rico, Guam and the Virgin Islands.
+
 `stratum` is the unit within which co-administration is decided. It is the year
 for GSS, the cycle for NHANES, and `year|state` for BRFSS, because a BRFSS module
 chosen by 13 states would otherwise look nationally available.
@@ -163,7 +166,7 @@ figures. Run the command yourself; the numbers should reproduce exactly.
 |---|---|---|---|
 | GSS `numgiven` x `socfrend` | 5,819 / 45,294 | 0 in 2004, 1,526 in 1985 | split ballot |
 | NHANES `RIAGENDR BMXBMI` + `LBXGLU` | 128,809 / 109,407 / 39,753 | ~8,000 to ~3,000 per cycle | fasting subsample |
-| BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 states, 2023 | state optional modules |
+| BRFSS `GUNLOAD` x `ACEDEPRS` | 63,744 / 481,178 | 5,337 across 4 of 52 in 2023, plus 920 in 1 of 54 in 2022 | state optional modules |
 
 A caution the tool cannot give you: `FIREARM5` is whether a firearm is kept in the
 home, `GUNLOAD` and `LOADULK2` are the storage items. covary will happily confirm
