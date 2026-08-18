@@ -122,7 +122,28 @@ if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name"
   pass=$((pass+1)); echo "  ok   mcp gets the overlap warning too"
 else fail=$((fail+1)); echo "  FAIL mcp is missing the overlap warning"; fi
 
-g "--why is not a no-op"                   "more; --why" numgiven socfrend --dataset gss
+# --why must show strictly more than the default. The old test grepped for a
+# substring the default output also contains, so it passed on a literal no-op.
+if [ "$(python3 covary.py numgiven socfrend --dataset gss --why 2>&1 | grep -c 'never collected')" \
+     -gt "$(python3 covary.py numgiven socfrend --dataset gss 2>&1 | grep -c 'never collected')" ]; then
+  pass=$((pass+1)); echo "  ok   --why shows strictly more than the default"
+else fail=$((fail+1)); echo "  FAIL --why shows no more than the default"; fi
+
+# No hint may name a state the caller already set. Three separate hints did:
+# "Run with --min 0" on a --min 0 run, "--why for all of them" on a --why run,
+# and the MCP equivalent, which is a loop instruction to an autonomous agent.
+if python3 covary.py PREGNANT PROSTATE --dataset brfss --min 0 2>&1 | grep -qi "run with --min 0"; then
+  fail=$((fail+1)); echo "  FAIL hint says 'run with --min 0' to a caller who passed it"
+else pass=$((pass+1)); echo "  ok   no --min 0 hint when --min 0 was passed"; fi
+
+if python3 covary.py numgiven socfrend --dataset gss --why 2>&1 | grep -q "more; --why"; then
+  fail=$((fail+1)); echo "  FAIL hint says '--why' to a caller who passed --why"
+else pass=$((pass+1)); echo "  ok   no --why hint when --why was passed"; fi
+
+if printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_covariation","arguments":{"variables":["PREGNANT","PROSTATE"],"dataset":"brfss","min_n":0}}}' \
+   | python3 mcp_server.py | grep -q "call again with min_n 0"; then
+  fail=$((fail+1)); echo "  FAIL mcp tells an agent to call again with the arguments it just used"
+else pass=$((pass+1)); echo "  ok   mcp does not loop an agent back on its own arguments"; fi
 g "readme opening example reproduces"      "1985, 1987, 2004, 2024" numgiven socfrend
 
 # a file may hold many strata, but a stratum must not span files, or the cheap
@@ -197,6 +218,13 @@ j "overlap warning is in the payload" \
   'assert any(w["kind"]=="same_people_different_ids" for w in d["warnings"])' \
   RIAGENDR BMXBMI --dataset nhanes
 j "declared exit matches the contract" 'assert d["exit"]==1' numgiven socfrend --dataset gss --min 99999
+
+# The property, not its name: every decision-relevant fact in the payload must
+# reach the text. The signature check below is kept as a cheap guard, but it is
+# what passed while "4 of 52 states" lived only in the prose.
+if python3 check_completeness.py > /tmp/covary_comp.out 2>&1; then
+  pass=$((pass+1)); echo "  ok   every payload fact reaches the reader"
+else fail=$((fail+1)); echo "  FAIL payload facts never reach the reader"; sed 's/^/       /' /tmp/covary_comp.out | tail -3; fi
 
 # render() must not be able to reach the database: if it cannot, it cannot state
 # a fact the payload lacks. This is the structural guarantee, not a spot check.

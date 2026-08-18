@@ -79,7 +79,7 @@ jointly on the same respondents (min 1):
   NONE. No respondent is non-missing on all of these in any stratum
   covered by this index at min 1.
   Before concluding these were never asked together: this index
-  covers gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an
+  covers brfss 2011-2023, so an
   earlier or later administration is invisible here. And a
   question skipped by a filter is absent for that reason, not
   because it was left off the instrument. Run with --min 0

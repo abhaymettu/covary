@@ -16,7 +16,8 @@ Register it with:
 import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from covary import connect, analyze, render, denominators, resolve, all_names, DBS
+from covary import (connect, analyze, render, resolve, empty_payload, stamp,
+                    REASONS, all_names, DBS)
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -111,23 +112,29 @@ def run(variables, dataset=None, min_n=1, detail=False):
     variables = list(dict.fromkeys(variables))   # a repeat used to force a false NONE
     db = connect(dataset)
     variables, notes, ambiguous = resolve(db, variables)
-    if ambiguous:
-        return "\n".join(
-            [f"Ambiguous: {v!r} differs only by case from {', '.join(c)}, which are "
-             f"in different datasets." for v, c in ambiguous]
-            + ["Name a dataset, or spell it as that dataset spells it."]), True
 
-    # One computation, two renderings, shared with the CLI. Every caveat lives in
-    # analyze() and render() reads nothing else, so a fact cannot reach one
-    # interface and not another.
-    D = analyze(db, variables, dataset, min_n, min_year=None)
-    D["_denom"] = denominators(db, dataset)
-    text = "\n".join(list(notes) + render(D, cap=None if detail else 12,
-                                          for_agent=True, detail=detail))
-    text += ("\n\nPresence means non-missing on the actual variable, so a respondent "
-             "who skipped a module or an exam is correctly absent. Read any warning "
-             "above before reporting a total to the user.")
-    return text, D["reason"] in ("not_found",)
+    # The ambiguous branch used to hand-build its own sentences here, with
+    # different capitalisation and a different closing line from the CLI's, for
+    # the same condition. render() had a branch this interface could never reach.
+    if ambiguous:
+        D = empty_payload(db, variables, dataset, min_n, None)
+        D.update(reason="ambiguous", ok=False,
+                 ambiguous=[[v, c] for v, c in ambiguous])
+        D = stamp(D)
+    else:
+        D = analyze(db, variables, dataset, min_n, min_year=None)
+
+    D["notes"] = list(notes) + D["notes"]
+    text = "\n".join(render(D, cap=None if detail else 12,
+                             for_agent=True, detail=detail))
+    if D["reason"] not in ("not_found", "ambiguous"):
+        text += ("\n\nPresence means non-missing on the actual variable, so a "
+                 "respondent who skipped a module or an exam is correctly absent. "
+                 "Read any warning above before reporting a total to the user.")
+    # isError from the same table the CLI's exit code comes from. It used to be
+    # computed here from a one-member tuple, so cross_dataset was exit 2 on the
+    # CLI and a clean success over MCP.
+    return text, REASONS[D["reason"]]["is_error"]
 
 
 def handle(req):

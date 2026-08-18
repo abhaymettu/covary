@@ -413,6 +413,22 @@ def show_joint(rows, denom, cap=12):  # rows: (dataset, stratum, n, filtered)
     return out
 
 
+# What a reason means, in one place. exit and isError were derived separately in
+# analyze() and in mcp_server.py, so cross_dataset was exit 2 on the CLI and a
+# clean success over MCP: the interface told an agent the design simply had no
+# joint n, rather than that the question could not be answered as asked.
+REASONS = {
+    "ok":              {"exit": 0, "is_error": False},
+    "below_threshold": {"exit": 1, "is_error": False},
+    "never_together":  {"exit": 1, "is_error": False},
+    "cross_dataset":   {"exit": 2, "is_error": True},
+    "not_found":       {"exit": 2, "is_error": True},
+    "ambiguous":       {"exit": 2, "is_error": True},
+    "find":            {"exit": 0, "is_error": False},
+    "find_empty":      {"exit": 2, "is_error": True},
+}
+
+
 # How to tell the reader to ask for more. The CLI has flags; an agent has
 # arguments. Scrubbing flag names out of finished text failed three rounds in a
 # row because each round emitted one from a new place, so the phrasing is chosen
@@ -427,8 +443,47 @@ HINTS = {
 }
 
 
-def hint(key, for_agent):
-    return HINTS[key][1 if for_agent else 0]
+def hint(key, for_agent, already=False):
+    """The wording, unless the caller already did the thing.
+
+    Three separate hints told a caller to do what they had just done: "Run with
+    --min 0" printed by a --min 0 run, "--why for all of them" by a --why run,
+    and "call again with min_n 0" to an MCP client that had called with min_n 0.
+    That last one is a loop instruction to an autonomous agent.
+
+    Two rounds were spent on where the wording is chosen. The wording was never
+    the bug. Nothing checked whether the advice still applied at the moment it
+    was written, so the check lives here, once, instead of at each site.
+    """
+    return None if already else HINTS[key][1 if for_agent else 0]
+
+
+def empty_payload(db, vars_, dataset, min_n, min_year):
+    """Every payload carries the same keys. The ambiguous branch used to be
+    hand-built with nine of them missing, so d["usable"] raised KeyError on that
+    branch alone."""
+    return {"variables": list(vars_), "dataset": dataset, "min": min_n,
+            "min_year": min_year, "notes": [], "warnings": [], "marginals": [],
+            "usable": [], "zero": [], "dropped": None, "leave_one_out": [],
+            "best_below_threshold": None, "not_found": [], "suggestions": {},
+            "ambiguous": [], "cross_dataset": None, "denominators": [],
+            "collected_but_no_overlap": {"strata": 0, "disjoint": 0},
+            "coverage": index_coverage(db)}
+
+
+def index_coverage(db):
+    """What this index actually spans, asked of the index.
+
+    The renderer used to print "gss 1972-2024, nhanes 1999-2023, brfss 2011-2023"
+    as string literals inside a caveat. They were right, and nothing would have
+    kept them right after a rebuild, and a --json consumer never saw them at all.
+    That caveat is the one thing bounding a never_together verdict.
+    """
+    rows = db.execute(
+        "select dataset, min(substr(stratum,1,instr(stratum||'|','|')-1)),"
+        "       max(substr(stratum,1,instr(stratum||'|','|')-1))"
+        " from strata group by dataset order by dataset").fetchall()
+    return [{"dataset": d, "first": lo, "last": hi} for d, lo, hi in rows]
 
 
 def analyze(db, vars_, dataset, min_n, min_year):
@@ -454,11 +509,9 @@ def analyze(db, vars_, dataset, min_n, min_year):
       not_found               a name is not in the index
       ambiguous              a name differs only by case across datasets
     """
-    D = {"variables": list(vars_), "dataset": dataset, "min": min_n,
-         "min_year": min_year, "notes": [], "warnings": [], "marginals": [],
-         "usable": [], "zero": [], "dropped": None, "leave_one_out": [],
-         "best_below_threshold": None, "not_found": [], "suggestions": {},
-         "ambiguous": [], "cross_dataset": None}
+    # public keys only; _-prefixed side channels were how the denominator and the
+    # absence rows reached the text without reaching the payload
+    D = empty_payload(db, vars_, dataset, min_n, min_year)
 
     marg = marginals(db, vars_, dataset)
     found = {r[0] for r in marg}
@@ -467,8 +520,8 @@ def analyze(db, vars_, dataset, min_n, min_year):
         names = all_names(db)
         D.update(not_found=missing,
                  suggestions={m: suggest(db, m, names=names) for m in missing},
-                 reason="not_found", ok=False, exit=2)
-        return D
+                 reason="not_found", ok=False)
+        return stamp(D)
 
     datasets = {r[1] for r in marg}
     overlapping = []
@@ -494,9 +547,8 @@ def analyze(db, vars_, dataset, min_n, min_year):
              "double_counts_people": dbl})
 
     if len(datasets) > 1 and not dataset:
-        D.update(cross_dataset=sorted(datasets), reason="cross_dataset",
-                 ok=False, exit=2)
-        return D
+        D.update(cross_dataset=sorted(datasets), reason="cross_dataset", ok=False)
+        return stamp(D)
 
     rows, usable = usable_strata(db, vars_, dataset, min_n, min_year)
     why = absences(db, vars_, dataset, datasets)
@@ -509,19 +561,20 @@ def analyze(db, vars_, dataset, min_n, min_year):
     D["collected_but_no_overlap"] = {"strata": len(zeros),
                                      "disjoint": sum(1 for r in zeros if r[3])}
     D["dropped"] = as_dropped(why)
-    D["_why"] = why                       # for the renderer only, stripped before json
+    D["denominators"] = [{"dataset": d, "group": h, "strata": n}
+                         for (d, h), n in denominators(db, dataset).items()]
 
     if usable:
-        D.update(reason="ok", ok=True, exit=0)
+        D.update(reason="ok", ok=True)
     else:
         near = [r for r in joint(db, vars_, dataset, 1) if r[2] > 0]
         best = max(near, key=lambda r: r[2], default=None)
         if best:
             D["best_below_threshold"] = {"dataset": best[0], "stratum": best[1],
                                          "n": best[2]}
-            D.update(reason="below_threshold", ok=False, exit=1)
+            D.update(reason="below_threshold", ok=False)
         else:
-            D.update(reason="never_together", ok=False, exit=1)
+            D.update(reason="never_together", ok=False)
         D["leave_one_out"] = [{"drop": d, "dataset": ds2, "stratum": st, "n": n}
                               for d, ds2, st, n in
                               leave_one_out(db, vars_, dataset, min_n, min_year)]
@@ -532,7 +585,27 @@ def analyze(db, vars_, dataset, min_n, min_year):
     for ds, st, clash in overlapping:
         D["warnings"].append({"kind": "same_people_different_ids",
                               "dataset": ds, "stratum": st, "shares_with": clash})
+    return stamp(D)
+
+
+def stamp(D):
+    """exit and is_error come from REASONS, never computed at a call site."""
+    D["exit"] = REASONS[D["reason"]]["exit"]
+    D["is_error"] = REASONS[D["reason"]]["is_error"]
     return D
+
+
+def denom_map(D):
+    """The 'of 52 states' denominator, from the payload."""
+    return {(d["dataset"], d["group"]): d["strata"] for d in D.get("denominators", [])}
+
+
+def why_from(D):
+    """Rebuild what show_absences needs, from the public payload only."""
+    dr = D.get("dropped") or {}
+    partial = [(p["dataset"], p["stratum_group"], p["absent"], p["strata"])
+               for p in dr.get("partial", [])]
+    return (partial, dr.get("none_of_them", {}))
 
 
 def render(D, cap=12, for_agent=False, detail=False):
@@ -544,6 +617,9 @@ def render(D, cap=12, for_agent=False, detail=False):
     lim = cap if cap is not None else 10 ** 9
     L = []
 
+    for n in D["notes"]:
+        if isinstance(n, str):
+            L.append(n)
     if D["reason"] == "not_found":
         where = f"dataset {D['dataset']}" if D["dataset"] else "any indexed dataset"
         L.append(f"not found in {where}: {', '.join(D['not_found'])}")
@@ -563,9 +639,6 @@ def render(D, cap=12, for_agent=False, detail=False):
         L.append("  name one dataset, or spell it as that dataset spells it")
         return L
 
-    for n in D["notes"]:
-        if isinstance(n, str):
-            L.append(n)
     L.append("per variable, ignoring co-administration:")
     for m in D["marginals"]:
         span = (", ".join(m["strata_list"]) if m["strata_list"]
@@ -586,13 +659,13 @@ def render(D, cap=12, for_agent=False, detail=False):
 
     if D["reason"] == "ok":
         rows = [(u["dataset"], u["stratum"], u["n"], False) for u in D["usable"]]
-        L.extend(show_joint(rows, D.get("_denom", {}), cap))
+        L.extend(show_joint(rows, denom_map(D), cap))
         if D["min"] == 0 and D["zero"]:
             L.append("")
             L.append("also collected together, with no respondent having all of them:")
             L.extend(show_joint([(z["dataset"], z["stratum"], 0,
                                   z["pair_with_no_overlap"]) for z in D["zero"]],
-                                D.get("_denom", {}), cap))
+                                denom_map(D), cap))
             L.append("  A split ballot and a skip pattern both look exactly like this,")
             L.append("  so presence cannot tell them apart. The codebook decides.")
     else:
@@ -607,16 +680,26 @@ def render(D, cap=12, for_agent=False, detail=False):
                      "excluded them.")
         else:
             L.append("  Before concluding these were never asked together: this index")
-            L.append("  covers gss 1972-2024, nhanes 1999-2023, brfss 2011-2023, so an")
+            L.append("  covers " + ", ".join(
+                f"{c['dataset']} {c['first']}-{c['last']}" for c in D["coverage"])
+                + ", so an")
             L.append("  earlier or later administration is invisible here. And a")
             L.append("  question skipped by a filter is absent for that reason, not")
-            L.append(f"  because it was left off the instrument. {hint('min0', for_agent).capitalize()}")
-            L.append("  to see strata where all were collected but no one has them all.")
+            h = hint('min0', for_agent, already=(D["min"] == 0))
+            if h:
+                L.append(f"  because it was left off the instrument. {h.capitalize()}")
+                L.append("  to see strata where all were collected but no one has them all.")
+            else:
+                L.append("  because it was left off the instrument.")
         c = D.get("collected_but_no_overlap", {})
         if c.get("strata"):
             L.append("")
             L.append(f"  {c['strata']} stratum or strata collected all of these and still")
             L.append("  have no respondent with all of them.")
+            if D["min"] == 0 and D["zero"]:
+                L.extend(show_joint([(z["dataset"], z["stratum"], 0,
+                                      z["pair_with_no_overlap"]) for z in D["zero"]],
+                                    denom_map(D), cap))
             if c.get("disjoint"):
                 L.append(f"  {c['disjoint']} of those contain a pair with no respondent in common.")
                 L.append("  A split ballot and a skip pattern both look exactly like this, so")
@@ -631,14 +714,15 @@ def render(D, cap=12, for_agent=False, detail=False):
             L.append("  no single variable is responsible: dropping any one of them still")
             L.append(f"  leaves nothing at {label}.")
 
-    why = D.get("_why")
+    why = why_from(D)
     if why and (why[0] or why[1]):
         L.append("")
         L.append("strata that dropped out:")
-        n_show = lim if (detail or cap is None) else min(3, lim)
+        n_show = (10 ** 9) if (detail or cap is None) else min(3, lim)
         L.extend(show_absences(why, n_show))
         if len(why[0]) > n_show:
-            L.append(f"    ({len(why[0]) - n_show} more; {hint('why', for_agent)})")
+            h = hint('why', for_agent, already=detail)
+            L.append(f"    ({len(why[0]) - n_show} more{'; ' + h if h else ''})")
 
     for n in D["notes"]:
         if isinstance(n, dict) and n["kind"] == "gss_mode":
@@ -689,14 +773,16 @@ def main():
     if a.find:
         hits = find(db, a.find)
         if a.json:
-            print(json.dumps({"find": a.find, "reason": "find", "ok": bool(hits),
-                              "matches": [{"dataset": d, "variable": v}
-                                          for d, v in hits]}, indent=2))
+            print(json.dumps(stamp({"find": a.find,
+                                    "reason": "find" if hits else "find_empty",
+                                    "ok": bool(hits),
+                                    "matches": [{"dataset": d, "variable": v}
+                                                for d, v in hits]}), indent=2))
         else:
             for d, v in hits:
                 print(f"  {d:<7} {v}")
             print(f"{len(hits)} name{'' if len(hits) == 1 else 's'} matching {a.find!r}")
-        return 0 if hits else 2
+        return REASONS["find" if hits else "find_empty"]["exit"]
 
     a.variables, notes, ambiguous = resolve(db, a.variables)
     # Dedupe AFTER resolve. joint() keys by name, so a repeat made the match count
@@ -704,9 +790,10 @@ def main():
     a.variables = list(dict.fromkeys(a.variables))
 
     if ambiguous:
-        D = {"variables": a.variables, "dataset": a.dataset, "min": a.min,
-             "min_year": a.min_year, "reason": "ambiguous", "ok": False, "exit": 2,
-             "ambiguous": [[v, c] for v, c in ambiguous], "notes": [], "warnings": []}
+        D = empty_payload(db, a.variables, a.dataset, a.min, a.min_year)
+        D.update(reason="ambiguous", ok=False,
+                 ambiguous=[[v, c] for v, c in ambiguous])
+        D = stamp(D)
     else:
         D = analyze(db, a.variables, a.dataset, a.min, a.min_year)
     D["notes"] = [n.strip() for n in notes] + D["notes"]
@@ -720,11 +807,10 @@ def main():
                          indent=2))
     else:
         cap = None if a.all else 12
-        D["_denom"] = denominators(db, a.dataset)
         out = render(D, cap, detail=a.why)
         stream = sys.stderr if D["reason"] in ("not_found", "ambiguous") else sys.stdout
         print("\n".join(out), file=stream)
-    return D["exit"]
+    return REASONS[D["reason"]]["exit"]
 
 
 if __name__ == "__main__":
