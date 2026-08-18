@@ -49,6 +49,28 @@ g "case correction is announced"          "reading NUMGIVEN as numgiven" NUMGIVE
 g "suggests near names"                   "socfrend" socfriend --dataset gss
 g "brfss rolls up rather than listing all" "of 52 states" GUNLOAD ACEDEPRS --dataset brfss
 
+echo "tier 3 features"
+t 0 "--find with a hit"                           --find gunload --dataset brfss
+t 2 "--find with no hit"                          --find zzzznope
+t 1 "per-stratum --min drops a poolable year"     GUNLOAD ACEDEPRS --dataset brfss --min 2000
+t 0 "--min-year keeps it, states pooled"          GUNLOAD ACEDEPRS --dataset brfss --min-year 2000
+g "leave-one-out names the culprit"       "without big5a1" big5a1 numgiven socfrend --dataset gss
+g "leave-one-out gives the reachable n"   "gss 1985 n=1526" big5a1 numgiven socfrend --dataset gss
+g "absence is attributed per year"        "2021         5 strata never collected ACEDEPRS" \
+  GUNLOAD ACEDEPRS --dataset brfss --why
+g "disjoint is called out, not absence"   "WERE administered" PREGNANT PROSTATE --dataset brfss
+g "truncation is announced with its escape" "CLI: --all" big5a1 numgiven socfrend --dataset gss
+g "--all defeats truncation"              "1972" big5a1 numgiven socfrend --dataset gss --all
+
+if python3 covary.py PREGNANT PROSTATE --dataset brfss --json | python3 -c '
+import json,sys; d=json.load(sys.stdin)
+assert d["ok"] is False and d["usable"] == []
+assert d["leave_one_out"][0]["drop"] == "PROSTATE"
+assert d["collected_but_no_overlap"]["disjoint"] == 1
+' 2>/dev/null; then
+  pass=$((pass+1)); echo "  ok   --json parses and carries the verdict"
+else fail=$((fail+1)); echo "  FAIL --json"; fi
+
 echo "mcp server contract"
 m() {  # m <description> <pattern> <json>
   desc=$1; pat=$2; json=$3

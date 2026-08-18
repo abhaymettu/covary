@@ -15,9 +15,11 @@
 #   unit_id  SEQN, unique within (dataset, stratum)
 #   variable
 #
-# Dietary is excluded: DR/DS files are day-level or supplement-level with
-# several rows per SEQN, so presence there needs a dedup rule that would not
-# mean the same thing as it does everywhere else.
+# Nothing is excluded by table. Dietary (DR/DS) was excluded until 2026-08-18 on
+# the reasoning that several rows per SEQN would make presence mean something
+# different there. That reasoning was wrong: presence is deduped to one row per
+# (respondent, variable) below, and NHANES has multi-row tables well outside
+# dietary (AUXAR runs ~12 rows per person) that were always handled correctly.
 #
 # Resumable. A cycle whose parquet already exists is skipped, so a failed run
 # is fixed by rerunning it.
@@ -45,11 +47,6 @@ if (file.exists(MAN)) {
   write_parquet(man, MAN)
 }
 cat("manifest:", nrow(man), "tables\n")
-
-source("nhanes_scope.R")   # one definition, shared with audit.R
-drop <- nhanes_dietary(man)
-man <- man[!drop, ]
-cat("tables:", nrow(man), "after dropping", sum(drop), "dietary\n")
 
 # Read the XPT raw, with haven, NOT with nhanesFromURL. nhanesA applies value-label
 # translation on the way in, and a coded value with no matching label entry comes

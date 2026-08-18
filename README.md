@@ -52,8 +52,44 @@ virtualenv and no dependencies. The 129MB index is in the repo.
 ```bash
 python3 covary.py numgiven talkto1 friend1 --min 300
 python3 covary.py RIAGENDR BMXBMI LBXGLU --dataset nhanes
-python3 covary.py FIREARM5 ACEDEPRS --dataset brfss
+python3 covary.py GUNLOAD ACEDEPRS --dataset brfss
+python3 covary.py --find gun --dataset brfss          # half-remembered a name
 ```
+
+| flag | what it is for |
+|---|---|
+| `--min N` | minimum joint n per stratum |
+| `--min-year N` | minimum joint n for a whole compound group, e.g. a BRFSS year pooled over its states. Per-stratum is the wrong grain when the analyst pools, which is what they do |
+| `--why` | also report which variable was absent in each stratum that dropped out |
+| `--all` | do not truncate the per-group list of strata |
+| `--json` | machine-readable, so the tool composes in a pipeline |
+| `--find PAT` | list indexed names containing PAT, then exit |
+
+**A zero answers the wrong question, so covary answers the next one too.** When
+nothing is usable it reports what dropping one variable would buy you, and why
+each stratum dropped out:
+
+```
+$ python3 covary.py PREGNANT PROSTATE --dataset brfss
+...
+  1 stratum collected all of these and still has
+  no respondent with all of them.
+  1 of those is perfectly disjoint, the signature of a skip pattern
+  rather than a module that never ran. These questions WERE administered.
+
+  dropping one variable:
+    without PROSTATE     brfss 2018|NY n=6685
+    without PREGNANT     brfss 2011|HI n=2480
+
+  why the rest dropped out:
+    brfss   2011         52 strata never collected PROSTATE
+```
+
+"The module never ran here" and "both modules ran and no respondent has both" are
+different problems with different remedies. BRFSS 2021 is the case: five states
+ran `GUNLOAD` without `ACEDEPRS`, eleven ran `ACEDEPRS` without `GUNLOAD`, and none
+ran both. That is a fact about that year's module choices, not a gap in the
+instrument, and covary used to report the two identically.
 
 Exit status gates a pipeline rather than only informing a human, and the three
 cases are distinct so a script can tell them apart:
@@ -175,5 +211,6 @@ happened to use continuous variables.
 
 The audit has since had four bugs of its own, which is more than the index had.
 Each looked exactly like a data bug. That is the argument for exhaustive mode and
-for `nhanes_scope.R`, which exists so the builder and the audit cannot disagree
-about what is in scope.
+for `fips.R`, which exists so the builder and the audit cannot disagree about the
+state map. A copy of that map in both files had already caused one false audit
+failure.

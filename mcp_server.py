@@ -16,7 +16,8 @@ Register it with:
 import json, os, sqlite3, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from covary import connect, marginals, joint, denominators, show_joint, resolve, suggest, DBS
+from covary import (connect, marginals, joint, denominators, show_joint, resolve,
+                    suggest, all_names, absences, show_absences, leave_one_out, DBS)
 import glob
 
 DATASETS = ("gss", "nhanes", "brfss")
@@ -107,8 +108,9 @@ def run(variables, dataset=None, min_n=1):
         if dataset:
             out.append("  A variable can be real but belong to another dataset. "
                        "Retry without `dataset` to check all of them.")
-        for m in missing[:8]:      # suggest() is a full scan; do not do 200 of them
-            sg = suggest(db, m)
+        names = all_names(db)      # one scan, however many names are unknown
+        for m in missing:
+            sg = suggest(db, m, names=names)
             if sg:
                 out.append(f"  names starting like {m!r}: {', '.join(sg)}")
         return "\n".join(out), True
@@ -150,15 +152,31 @@ def run(variables, dataset=None, min_n=1):
             zero = [r for r in joint(db, variables, dataset, 0) if r[3]]
             if zero:
                 lines.append(
-                    f"Note: {len(zero)} stratum or strata have all of these collected "
+                    f"Note: {len(zero)} stratum or strata had all of these collected "
                     "with perfectly disjoint respondents, which is the signature of a "
                     "skip pattern rather than a design gap. These questions were "
                     "administered.")
+        # What to give up, and where each stratum went. The decision on a NOT
+        # USABLE is which variable to drop, not whether to give up, and an agent
+        # that is only told "no" will report the design as dead.
+        loo = leave_one_out(db, variables, dataset)
+        if loo:
+            lines.append("\nDropping one variable makes it usable again:")
+            for d, ds, st, n in loo:
+                lines.append(f"  without {d}: {ds} {st} n={n}")
+        why = absences(db, variables, dataset, datasets)
+        if why[0] or why[1]:
+            lines.append("\nWhere the strata went, absent variable named per group:")
+            lines.extend(show_absences(why))
         return "\n".join(lines), False
 
+    why = absences(db, variables, dataset, datasets)
     denom = denominators(db, dataset)
     lines.append(f"\nUsable strata, every variable present on the same respondent (min_n={min_n}):")
     lines.extend(show_joint(usable, denom))
+    if why[0] or why[1]:
+        lines.append("\nStrata that dropped out, absent variable named per group:")
+        lines.extend(show_absences(why))
     lines.append(
         "\nPresence means non-missing on the actual variable, so a respondent who "
         "skipped a module or an exam is correctly absent.")
