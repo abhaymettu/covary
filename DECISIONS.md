@@ -200,6 +200,21 @@ Two things made it disqualifying rather than annoying:
 Fix: read the XPT raw with `haven::read_xpt`. Presence does not need labels, so
 it does not need translation.
 
+**A whole NHANES rebuild that produced nothing, and said so cheerfully.** Found
+2026-08-18 while adding dietary. `mclapply` forks a child per table, and macOS
+kills any forked child once the Objective-C runtime has initialized, which loading
+`arrow` and `haven` does. Every child died. `mclapply` returns `NULL` for a dead
+child, and `NULL` was also `one_table`'s way of saying "this table has no
+respondent id, skip it", so 1,597 dead children read as 1,597 empty tables and
+every cycle was skipped with "nothing usable". Exit status 0.
+
+Two fixes, and the second is the one that matters. The build re-execs itself once
+with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`, which is the workaround. And
+`NULL` is no longer a legal return: "no respondent id" is now `"SKIP"`, so
+anything `NULL` is a crashed child and is fatal for the cycle, like an unfetchable
+table already was. The lesson is not about macOS. It is that a sentinel meaning
+"nothing here, carry on" must never be the same value a crash produces.
+
 **The audit's own bugs, of which there were more than the index had.** Worth
 recording plainly, because both looked exactly like data bugs and the instinct to
 trust the audit over the data would have been wrong twice.

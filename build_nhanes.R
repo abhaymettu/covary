@@ -24,6 +24,18 @@
 # Resumable. A cycle whose parquet already exists is skipped, so a failed run
 # is fixed by rerunning it.
 
+# macOS crashes any fork()ed child once the Objective-C runtime has initialized,
+# which is every child mclapply makes here. Found 2026-08-18 the hard way: the
+# children died, mclapply returned NULL for each, and NULL meant "no respondent
+# id" to one_table(), so every cycle read as empty and was skipped with a cheerful
+# "nothing usable". Setting this from inside R is too late, so re-exec once.
+if (Sys.info()[["sysname"]] == "Darwin" &&
+    Sys.getenv("OBJC_DISABLE_INITIALIZE_FORK_SAFETY") == "") {
+  Sys.setenv(OBJC_DISABLE_INITIALIZE_FORK_SAFETY = "YES")
+  quit(status = system2(file.path(R.home("bin"), "Rscript"),
+                        c("build_nhanes.R", commandArgs(TRUE))))
+}
+
 suppressPackageStartupMessages({
   library(nhanesA); library(haven); library(arrow); library(dplyr); library(parallel)
 })
@@ -54,11 +66,16 @@ cat("manifest:", nrow(man), "tables\n")
 # DIQ_J 3.2%, which would understate every joint n touching a coded variable.
 # Presence does not need labels, so it does not need translation.
 #
-# Returns a tibble, NULL for a table that has no respondent id at all (drug and
-# food-code lookups), or the string "FAIL" when CDC would not serve the file.
-# A transient fetch failure that is quietly dropped would silently shrink a joint
-# n, which is the exact failure mode this whole index exists to catch, so a cycle
-# with any FAIL is not written and gets retried on the next run.
+# Returns a tibble, "SKIP" for a table that has no respondent id at all (drug and
+# food-code lookups), or "FAIL" when CDC would not serve the file. A transient
+# fetch failure that is quietly dropped would silently shrink a joint n, which is
+# the exact failure mode this whole index exists to catch, so a cycle with any
+# FAIL is not written and gets retried on the next run.
+#
+# NULL is deliberately not a return value here. mclapply returns NULL for a child
+# that died, so anything NULL is a crash, not a result, and it is treated as FAIL.
+# Overloading NULL to also mean "nothing to index" is what let a whole run of
+# dead children pass for a run of empty tables.
 one_table <- function(i) {
   tb <- man$Table[i]
   d <- NULL
@@ -71,7 +88,7 @@ one_table <- function(i) {
   if (is.null(d) || !is.data.frame(d)) { cat("  FAIL", tb, "\n"); return("FAIL") }
   if (!"SEQN" %in% names(d)) {
     cat("  skip", tb, "(no SEQN, cols:", paste(head(names(d), 4), collapse=","), ")\n")
-    return(NULL)
+    return("SKIP")
   }
 
   vars <- setdiff(names(d), "SEQN")
@@ -90,10 +107,11 @@ for (cyc in unique(man$Years)) {
   rows <- which(man$Years == cyc)
   cat(cyc, ":", length(rows), "tables\n")
   got <- mclapply(rows, one_table, mc.cores = CORES)
-  bad <- sum(vapply(got, identical, logical(1), "FAIL"))
-  if (bad) { cat("  ", bad, "tables unfetchable, not writing this cycle\n"); next }
+  bad <- sum(!vapply(got, is.data.frame, logical(1)) &
+             !vapply(got, identical, logical(1), "SKIP"))
+  if (bad) { cat("  ", bad, "tables unfetchable or crashed, not writing this cycle\n"); next }
 
-  pres <- bind_rows(got[!vapply(got, is.null, logical(1))])
+  pres <- bind_rows(got[vapply(got, is.data.frame, logical(1))])
   if (!nrow(pres)) { cat("  nothing usable, skipping\n"); next }
 
   # distinct because a variable can appear in more than one file within a cycle
